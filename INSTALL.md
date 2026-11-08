@@ -96,8 +96,18 @@ Fang am besten klein an:
 
 Was TidyMac nie tut: Dateien überschreiben (bei gleichem Namen heißt die neue Datei „Name 2.pdf“), endgültig löschen („Löschen“ heißt immer Papierkorb), in Projektordnern (Git, Xcode, Node, Python, LaTeX …) etwas verändern, `~/Library`, versteckte Dateien, Programme oder Cloud-Ordner anfassen. Was beim letzten Scan geschützt wurde und warum, steht links unter **„Geschützt“**.
 
-## 6. Optional: Autostart und Hintergrund-Modus
+## 6. Alte Dateien löschen
 
+Links unter **„Löschen“** klickst du auf **„Alte Dateien prüfen“**. TidyMac sucht Dateien, die du seit über einem Jahr weder geöffnet noch geändert hast, und Claude schätzt ein, ob du sie noch brauchst. Projektordner, Fotoserien, Alben und geschützte Bereiche bleiben außen vor.
+
+- Nichts ist vorausgewählt. Setze bei jeder Datei, die wirklich weg kann, das Häkchen **„Löschen“** und klicke dann oben auf **„… löschen“**.
+- Gelöscht heißt immer: in den Papierkorb. Unter **„Verlauf“** kannst du es rückgängig machen.
+- **„Behalten“** blendet die Datei aus, und TidyMac schlägt sie nicht mehr vor, solange sie unverändert bleibt.
+- Ab wann eine Datei als alt gilt und wie sicher sich Claude sein muss, stellst du unter Einstellungen › Umbenennen & Löschen ein.
+
+## 7. Optional: Automatik, Autostart und Hintergrund-Modus
+
+- **Automatik:** Einstellungen › **Automatik** › „Jeden Tag automatisch aufräumen“. Dann räumt TidyMac jeden Tag um 10:00 (einstellbar) Downloads und Schreibtisch auf (andere Ordner kannst du hinzufügen). Automatisch passiert nur, was sicher ist; Unsicheres landet unter **„Zur Prüfung“**, gelöscht wird nie. War der Mac um 10:00 aus, holt TidyMac den Lauf am selben Tag nach. Mit „Jetzt ausführen“ probierst du es sofort aus. Danach kommt eine Mitteilung mit „Rückgängig“-Knopf. Damit das klappt, muss TidyMac laufen, also am besten auch den Autostart einschalten.
 - **Autostart:** Einstellungen › Allgemein › **„Beim Anmelden starten“**. Eventuell will macOS das unter Systemeinstellungen › Allgemein › Anmeldeobjekte noch bestätigt haben.
 - **Hintergrund-Modus:** Einstellungen › Hintergrund. TidyMac beobachtet dann z. B. Downloads und Schreibtisch und sortiert neue Dateien nur dann automatisch ein, wenn eine sichere Regel greift. Alles andere landet unter **„Zur Prüfung“**. Du bekommst eine Mitteilung mit „Rückgängig“-Knopf; die Mitteilungen erlaubst du beim Einschalten.
 

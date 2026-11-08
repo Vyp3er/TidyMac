@@ -187,6 +187,60 @@ final class BackgroundService {
     }
 }
 
+/// Daily automation: checks every minute (and after waking up) whether today's run is due.
+/// Its small state lives next to the settings, so a test home never touches the real one.
+@MainActor
+final class ScheduleService {
+    struct State: Codable {
+        var lastRun: Date?
+        var enabledAt: Date?
+        var lastSummary: String?
+    }
+
+    private var timer: Timer?
+    private var wakeObserver: NSObjectProtocol?
+    private var stateURL: URL?
+    private(set) var state = State()
+
+    func load(from url: URL) {
+        stateURL = url
+        if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode(State.self, from: data) {
+            state = decoded
+        }
+    }
+
+    func update(_ change: (inout State) -> Void) {
+        change(&state)
+        guard let stateURL, let data = try? JSONEncoder().encode(state) else { return }
+        try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: stateURL, options: .atomic)
+    }
+
+    func configure(enabled: Bool, check: @escaping @MainActor () -> Void) {
+        stop()
+        guard enabled else { return }
+        let timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { @MainActor in check() }
+        }
+        timer.tolerance = 15
+        self.timer = timer
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            // Give network volumes and Spotlight a moment after waking up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                Task { @MainActor in check() }
+            }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        wakeObserver = nil
+    }
+}
+
 enum Finder {
     static func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])

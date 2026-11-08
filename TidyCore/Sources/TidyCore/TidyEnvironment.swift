@@ -68,4 +68,22 @@ public struct TidyEnvironment: Sendable {
                 provider: provider, cache: provider == nil ? nil : makeCache(), general: settings.general,
                 aiSettings: settings.ai)
     }
+
+    public func makeDeletionAdvisor(provider: AIProvider?, now: Date = Date()) -> DeletionAdvisor {
+        DeletionAdvisor(home: home, settings: settings.deletion, aiSettings: settings.ai, provider: provider,
+                        cache: makeCache(), now: now)
+    }
+
+    /// The daily automation (Einstellungen › Automatik).
+    public func makeAutoSorter(journal: Journal) -> AutoSorter {
+        let env = self
+        let useAI = settings.schedule.useAI
+        return AutoSorter(
+            home: home, journal: journal, autoThreshold: settings.schedule.autoThreshold,
+            allowRenames: settings.schedule.allowRenames,
+            makePolicy: { env.makePolicy() },
+            makeScanner: { policy in env.makeScanner(policy: policy) },
+            makePlanner: { policy in env.makePlanner(policy: policy, provider: useAI ? env.makeProvider() : nil) },
+            executor: { policy in Executor(home: env.home, policy: policy, journal: journal) })
+    }
 }

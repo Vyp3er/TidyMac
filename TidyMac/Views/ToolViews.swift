@@ -319,6 +319,8 @@ struct HistoryView: View {
                     .foregroundStyle(.secondary)
                     if run.source == "background" {
                         Text("Hintergrund").font(.caption2).foregroundStyle(.purple)
+                    } else if run.source == "schedule" {
+                        Text("Automatik").font(.caption2).foregroundStyle(.purple)
                     }
                 }
                 .tag(run.id)

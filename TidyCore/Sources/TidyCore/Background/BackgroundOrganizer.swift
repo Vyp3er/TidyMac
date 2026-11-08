@@ -47,7 +47,11 @@ public struct BackgroundOutcome: Sendable {
     public var runID: String?
     public var moved: [PlannedAction] = []
     public var reviewCount = 0
+    /// Files without a confident target that were simply left where they are.
+    public var leftAlone = 0
     public var messages: [String] = []
+
+    public init() {}
 
     public var summary: String {
         var parts: [String] = []
@@ -174,7 +178,6 @@ public final class BackgroundOrganizer: @unchecked Sendable {
         let policy = makePolicy()
         let scanner = FileScanner(home: home, policy: policy, general: GeneralSettings())
         var candidates: [FileItem] = []
-        var outcome = BackgroundOutcome()
         for url in ready {
             guard let values = try? url.resourceValues(forKeys: Set(ProtectionPolicy.resourceKeys)) else { continue }
             if values.isDirectory == true && values.isPackage != true { continue } // folders: never automatic
@@ -185,35 +188,14 @@ public final class BackgroundOrganizer: @unchecked Sendable {
 
         let scan = ScanResult(roots: watchedFolders.map { ScanRoot(url: $0, mode: .inbox) }, candidates: candidates)
         let plan = await makePlanner(policy).plan(scan: scan)
-        var auto: [PlannedAction] = []
-        for var action in plan.actions {
-            let safe = action.kind == .move && action.warnings.isEmpty && action.confidence >= autoThreshold
-            if safe {
-                action.isSelected = true
-                auto.append(action)
-            } else {
-                journal.addReviewItem(path: action.source.path, suggestedFolder: action.destinationFolder.map { home.abbreviate($0) },
-                                      suggestedName: action.newName, confidence: action.confidence, reason: action.reason)
-                outcome.reviewCount += 1
-            }
-        }
-        for item in plan.unsorted {
-            journal.addReviewItem(path: item.url.path, suggestedFolder: nil, suggestedName: nil, confidence: 0,
-                                  reason: "Kein sicherer Zielordner gefunden")
-            outcome.reviewCount += 1
-        }
-        if !auto.isEmpty {
-            let result = executor(policy).execute(auto, title: "Hintergrund: \(auto.count) Datei\(auto.count == 1 ? "" : "en")", source: "background")
-            outcome.runID = result.runID
-            let doneEntries = Set(journal.entries(runID: result.runID).filter { $0.status == .done }.map(\.sourcePath))
-            outcome.moved = auto.filter { doneEntries.contains($0.source.path) }
-            outcome.messages = result.messages
-            for action in auto where !doneEntries.contains(action.source.path) && PathUtil.exists(action.source) {
-                journal.addReviewItem(path: action.source.path, suggestedFolder: action.destinationFolder.map { home.abbreviate($0) },
-                                      suggestedName: action.newName, confidence: action.confidence, reason: action.reason)
-                outcome.reviewCount += 1
-            }
-        }
+        let threshold = autoThreshold
+        let outcome = AutoExecution.apply(
+            plan: plan, home: home, journal: journal, reviewUnsorted: true,
+            title: { count in "Hintergrund: \(count) Datei\(count == 1 ? "" : "en")" },
+            autoAction: { action in
+                action.kind == .move && action.warnings.isEmpty && action.confidence >= threshold ? action : nil
+            },
+            execute: { actions, title in executor(policy).execute(actions, title: title, source: "background") })
         Log.background.info("background tick: \(outcome.summary, privacy: .public)")
         return outcome
     }

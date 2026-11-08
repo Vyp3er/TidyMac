@@ -2,16 +2,20 @@ import SwiftUI
 import TidyCore
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
-        TabView {
-            GeneralSettingsTab().tabItem { Label("Allgemein", systemImage: "gearshape") }
-            RulesSettingsTab().tabItem { Label("Regeln", systemImage: "list.bullet.rectangle") }
-            ProtectionSettingsTab().tabItem { Label("Schutz", systemImage: "lock.shield") }
-            AISettingsTab().tabItem { Label("KI", systemImage: "sparkles") }
-            BackgroundSettingsTab().tabItem { Label("Hintergrund", systemImage: "eye") }
-            RenameCleanupSettingsTab().tabItem { Label("Umbenennen & Aufräumen", systemImage: "textformat") }
+        @Bindable var model = model
+        TabView(selection: $model.settingsTab) {
+            GeneralSettingsTab().tabItem { Label("Allgemein", systemImage: "gearshape") }.tag("general")
+            RulesSettingsTab().tabItem { Label("Regeln", systemImage: "list.bullet.rectangle") }.tag("rules")
+            ProtectionSettingsTab().tabItem { Label("Schutz", systemImage: "lock.shield") }.tag("protection")
+            AISettingsTab().tabItem { Label("KI", systemImage: "sparkles") }.tag("ai")
+            ScheduleSettingsTab().tabItem { Label("Automatik", systemImage: "clock") }.tag("schedule")
+            BackgroundSettingsTab().tabItem { Label("Hintergrund", systemImage: "eye") }.tag("background")
+            RenameCleanupSettingsTab().tabItem { Label("Umbenennen & Löschen", systemImage: "textformat") }.tag("rename")
         }
-        .frame(width: 720, height: 560)
+        .frame(width: 760, height: 600)
     }
 }
 
@@ -399,7 +403,90 @@ struct RenameCleanupSettingsTab: View {
                 Stepper("Alte Installer ab \(model.settings.cleanup.installerAgeDays) Tagen", value: $model.settings.cleanup.installerAgeDays, in: 1...365)
                 TextField("Archiv-Ordner", text: $model.settings.cleanup.archiveFolder)
             }
+            Section("Löschvorschläge") {
+                Picker("Als alt gilt eine Datei nach", selection: $model.settings.deletion.minAgeDays) {
+                    Text("6 Monaten").tag(180)
+                    Text("1 Jahr").tag(365)
+                    Text("2 Jahren").tag(730)
+                    Text("3 Jahren").tag(1095)
+                    Text("5 Jahren").tag(1825)
+                }
+                Slider(value: $model.settings.deletion.minConfidence, in: 0.5...0.95, step: 0.05) {
+                    Text("Vorschlagen ab \(Int((model.settings.deletion.minConfidence * 100).rounded())) % Sicherheit")
+                }
+                Text("Gezählt wird ab dem letzten Öffnen, Ändern oder Ablegen. Claude sieht dabei nur Name, Ordner, Metadaten und kurze Textauszüge. Ohne KI werden nur eindeutige Fälle vorgeschlagen (alte Installer, Reste, entpackte Archive). Nichts ist vorausgewählt, und gelöscht wird immer in den Papierkorb.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text("Mit „Behalten“ gemerkt: \(model.keptCount) Datei\(model.keptCount == 1 ? "" : "en")")
+                    Spacer()
+                    Button("Vergessen") { model.resetKept() }.disabled(model.keptCount == 0)
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+}
+
+struct ScheduleSettingsTab: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Form {
+            Section {
+                Toggle("Jeden Tag automatisch aufräumen", isOn: $model.settings.schedule.enabled)
+                Text("Einmal am Tag zur eingestellten Uhrzeit scannt TidyMac die Ordner und sortiert sie. Automatisch ausgeführt wird nur, was sicher ist: Dateien verschieben und umbenennen, ohne Warnung und mit hoher Konfidenz. Ordner werden nie automatisch verschoben, gelöscht wird nie. Unsichere Vorschläge landen unter „Zur Prüfung“. War der Mac zur Uhrzeit aus oder im Ruhezustand, holt TidyMac den Lauf am selben Tag nach. Jeder Lauf steht im Verlauf und lässt sich rückgängig machen.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Zeit") {
+                DatePicker("Täglich um", selection: timeBinding, displayedComponents: .hourAndMinute)
+                if let next = model.nextAutomationRun {
+                    LabeledContent("Nächster Lauf", value: next.formatted(date: .abbreviated, time: .shortened))
+                }
+                if let summary = model.automationSummary {
+                    LabeledContent("Letzter Lauf", value: summary)
+                }
+                if model.settings.schedule.enabled && !LoginItem.isEnabled {
+                    Label("TidyMac muss dafür laufen. Tipp: Einstellungen › Allgemein › „Beim Anmelden starten“.", systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            Section("Ordner") {
+                PathListEditor(title: "Ordner", items: $model.settings.schedule.folders, placeholder: "~/Downloads")
+            }
+            Section("Verhalten") {
+                Toggle("Unklare Dateien mit Claude einordnen", isOn: $model.settings.schedule.useAI)
+                Text("Zählt zum Nutzungslimit deines Abos, höchstens \(model.settings.ai.maxFilesPerRun) Dateien pro Lauf. Ohne KI greifen nur die Regeln.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Nichtssagende Namen dabei umbenennen", isOn: $model.settings.schedule.allowRenames)
+                Slider(value: $model.settings.schedule.autoThreshold, in: 0.8...1, step: 0.01) {
+                    Text("Automatisch ab \(Int((model.settings.schedule.autoThreshold * 100).rounded())) % Konfidenz")
+                }
+                Toggle("Mitteilung mit Zusammenfassung und „Rückgängig“", isOn: $model.settings.schedule.notify)
+            }
+            Section {
+                HStack {
+                    Button("Jetzt ausführen") { model.runAutomation(manual: true) }
+                        .disabled(model.isWorking || model.settings.schedule.folders.isEmpty)
+                    if model.isAutomationRunning { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Text("Läuft sofort einmal, unabhängig von der Uhrzeit.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var timeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(bySettingHour: model.settings.schedule.hour, minute: model.settings.schedule.minute,
+                                      second: 0, of: Date()) ?? Date()
+            },
+            set: { date in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                model.settings.schedule.hour = parts.hour ?? 10
+                model.settings.schedule.minute = parts.minute ?? 0
+            })
     }
 }

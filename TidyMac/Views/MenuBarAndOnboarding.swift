@@ -29,6 +29,9 @@ struct MenuBarView: View {
                 model.settings.background.enabled = value
                 if value && model.settings.background.notify { NotificationManager.shared.requestAuthorization() }
             }))
+        Toggle("Automatik (täglich \(model.settings.schedule.timeText))", isOn: Binding(
+            get: { model.settings.schedule.enabled },
+            set: { model.settings.schedule.enabled = $0 }))
         Divider()
         Button("TidyMac öffnen") { show(model.selection ?? .sort) }
         SettingsLink { Text("Einstellungen …") }
@@ -136,10 +139,11 @@ struct OnboardingView: View {
     private var background: some View {
         @Bindable var model = model
         return VStack(alignment: .leading, spacing: 14) {
-            Label("Hintergrund-Modus (optional)", systemImage: "menubar.arrow.up.rectangle").font(.title2.bold())
-            Text("TidyMac kann Downloads und Schreibtisch beobachten. Neue Dateien werden nach einer Wartezeit nur dann automatisch einsortiert, wenn eine sichere Regel greift. Alles andere landet unter „Zur Prüfung“. Du bekommst eine Mitteilung mit „Rückgängig“-Knopf.")
+            Label("Automatisch aufräumen (optional)", systemImage: "menubar.arrow.up.rectangle").font(.title2.bold())
+            Text("TidyMac kann Downloads und Schreibtisch beobachten oder einmal am Tag aufräumen. Automatisch einsortiert wird nur, was sicher ist. Alles andere landet unter „Zur Prüfung“. Du bekommst eine Mitteilung mit „Rückgängig“-Knopf. Beides kannst du später in den Einstellungen ändern.")
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Hintergrund-Modus aktivieren", isOn: $model.settings.background.enabled)
+            Toggle("Automatik: täglich um \(model.settings.schedule.timeText) Downloads und Schreibtisch aufräumen", isOn: $model.settings.schedule.enabled)
             Toggle("Beim Anmelden starten", isOn: Binding(
                 get: { LoginItem.isEnabled },
                 set: { try? LoginItem.set($0) }))

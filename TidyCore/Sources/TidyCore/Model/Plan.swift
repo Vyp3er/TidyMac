@@ -24,6 +24,7 @@ public enum ActionOrigin: Codable, Sendable, Hashable {
     case ai
     case duplicate
     case cleanup
+    case deletion
     case renameScheme
     case manual
 
@@ -34,6 +35,7 @@ public enum ActionOrigin: Codable, Sendable, Hashable {
         case .ai: return "Claude"
         case .duplicate: return "Duplikat"
         case .cleanup: return "Aufräum-Vorschlag"
+        case .deletion: return "Löschvorschlag"
         case .renameScheme: return "Umbenennen"
         case .manual: return "Manuell"
         }

@@ -30,15 +30,23 @@ public final class AnthropicAPIProvider: AIProvider, @unchecked Sendable {
     }
 
     func makeRequest(_ request: AIRequest) throws -> URLRequest {
+        try makeRequest(PromptBuilder.task(for: request))
+    }
+
+    func makeRequest(_ task: AITask) throws -> URLRequest {
         guard let endpoint = Self.endpoint else { throw AIError.notConfigured("Ungültige API-URL") }
         guard !apiKey.isEmpty else { throw AIError.notConfigured("Kein API-Key hinterlegt") }
+        guard let schemaData = task.schemaJSON.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any] else {
+            throw AIError.notConfigured("Ungültiges Antwort-Schema")
+        }
         var body: [String: Any] = [
             "model": model,
             "max_tokens": 16000,
-            "system": PromptBuilder.systemPrompt,
-            "messages": [["role": "user", "content": PromptBuilder.userMessage(for: request)]],
+            "system": task.systemPrompt,
+            "messages": [["role": "user", "content": task.userMessage]],
             "output_config": [
-                "format": ["type": "json_schema", "schema": PromptBuilder.outputSchema],
+                "format": ["type": "json_schema", "schema": schema],
                 "effort": "low",
             ],
         ]
@@ -56,14 +64,14 @@ public final class AnthropicAPIProvider: AIProvider, @unchecked Sendable {
         return urlRequest
     }
 
-    public func suggest(_ request: AIRequest) async throws -> AIResponse {
-        let urlRequest = try makeRequest(request)
+    public func perform(_ task: AITask) async throws -> AIRawResult {
+        let urlRequest = try makeRequest(task)
         var attempt = 0
         while true {
             attempt += 1
             let (data, response) = try await session.data(for: urlRequest)
             guard let http = response as? HTTPURLResponse else { throw AIError.invalidResponse("keine HTTP-Antwort") }
-            if http.statusCode == 200 { return try parse(data) }
+            if http.statusCode == 200 { return try parseRaw(data) }
             let retryable = http.statusCode == 429 || http.statusCode == 529 || http.statusCode >= 500
             if retryable && attempt < 4 {
                 let retryAfter = Double(http.value(forHTTPHeaderField: "retry-after") ?? "") ?? pow(2, Double(attempt))
@@ -76,7 +84,14 @@ public final class AnthropicAPIProvider: AIProvider, @unchecked Sendable {
         }
     }
 
+    /// Sorting answer (used by tests).
     func parse(_ data: Data) throws -> AIResponse {
+        let raw = try parseRaw(data)
+        return AIResponse(items: try AIResponseParser.items(AISuggestion.self, from: raw.json),
+                          inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, costUSD: raw.costUSD)
+    }
+
+    func parseRaw(_ data: Data) throws -> AIRawResult {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AIError.invalidResponse("kein JSON")
         }
@@ -85,14 +100,14 @@ public final class AnthropicAPIProvider: AIProvider, @unchecked Sendable {
         if stop == "max_tokens" { throw AIError.invalidResponse("Antwort abgeschnitten (max_tokens)") }
         let content = json["content"] as? [[String: Any]] ?? []
         let text = content.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
-        let items = try AIResponseParser.parse(text: text)
+        let answer = try AIResponseParser.jsonData(fromText: text)
         let usage = json["usage"] as? [String: Any] ?? [:]
         let input = (usage["input_tokens"] as? Int ?? 0) + (usage["cache_read_input_tokens"] as? Int ?? 0)
             + (usage["cache_creation_input_tokens"] as? Int ?? 0)
         let output = usage["output_tokens"] as? Int ?? 0
         let price = Self.prices[json["model"] as? String ?? model] ?? Self.prices[model] ?? (0, 0)
         let cost = Double(input) / 1_000_000 * price.0 + Double(output) / 1_000_000 * price.1
-        return AIResponse(items: items, inputTokens: input, outputTokens: output, costUSD: cost)
+        return AIRawResult(json: answer, inputTokens: input, outputTokens: output, costUSD: cost)
     }
 
     public func checkAvailability() async -> AIAvailability {

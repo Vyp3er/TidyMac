@@ -207,6 +207,61 @@ public struct CleanupSettings: Codable, Sendable, Hashable {
     }
 }
 
+/// "Löschen": old files that are probably no longer needed. Nothing is ever pre-selected;
+/// every suggestion has to be confirmed on its own, and deleting always means the Trash.
+public struct DeletionSettings: Codable, Sendable, Hashable {
+    /// A file counts as old when it was neither opened nor changed for this many days.
+    public var minAgeDays = 365
+    /// Claude's verdict must be at least this sure before a file is suggested.
+    public var minConfidence = 0.6
+
+    public init() {}
+
+    enum CodingKeys: String, CodingKey { case minAgeDays, minConfidence }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = DeletionSettings()
+        minAgeDays = c.value(.minAgeDays, d.minAgeDays)
+        minConfidence = c.value(.minConfidence, d.minConfidence)
+    }
+}
+
+/// "Automatik": scan and sort a few folders once a day at a fixed time.
+public struct ScheduleSettings: Codable, Sendable, Hashable {
+    public var enabled = false
+    public var hour = 10
+    public var minute = 0
+    public var folders: [String] = ["~/Downloads", "~/Desktop"]
+    /// Ask Claude about files no rule can place (counts against the usage limit).
+    public var useAI = true
+    /// Only actions at least this sure run automatically; the rest goes to "Zur Prüfung".
+    public var autoThreshold = 0.9
+    /// Also apply the renaming scheme automatically.
+    public var allowRenames = true
+    public var notify = true
+
+    public init() {}
+
+    enum CodingKeys: String, CodingKey { case enabled, hour, minute, folders, useAI, autoThreshold, allowRenames, notify }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ScheduleSettings()
+        enabled = c.value(.enabled, d.enabled)
+        hour = min(max(c.value(.hour, d.hour), 0), 23)
+        minute = min(max(c.value(.minute, d.minute), 0), 59)
+        folders = c.value(.folders, d.folders)
+        useAI = c.value(.useAI, d.useAI)
+        autoThreshold = c.value(.autoThreshold, d.autoThreshold)
+        allowRenames = c.value(.allowRenames, d.allowRenames)
+        notify = c.value(.notify, d.notify)
+    }
+
+    /// "10:00"
+    public var timeText: String { String(format: "%02d:%02d", hour, minute) }
+}
+
 public struct TidySettings: Codable, Sendable, Hashable {
     public var general = GeneralSettings()
     public var protection = ProtectionSettings()
@@ -214,10 +269,12 @@ public struct TidySettings: Codable, Sendable, Hashable {
     public var ai = AISettings()
     public var background = BackgroundSettings()
     public var cleanup = CleanupSettings()
+    public var deletion = DeletionSettings()
+    public var schedule = ScheduleSettings()
 
     public init() {}
 
-    enum CodingKeys: String, CodingKey { case general, protection, rules, ai, background, cleanup }
+    enum CodingKeys: String, CodingKey { case general, protection, rules, ai, background, cleanup, deletion, schedule }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -227,6 +284,8 @@ public struct TidySettings: Codable, Sendable, Hashable {
         ai = c.value(.ai, AISettings())
         background = c.value(.background, BackgroundSettings())
         cleanup = c.value(.cleanup, CleanupSettings())
+        deletion = c.value(.deletion, DeletionSettings())
+        schedule = c.value(.schedule, ScheduleSettings())
     }
 
     public static func load(from url: URL) -> TidySettings {

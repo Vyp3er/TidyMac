@@ -1,6 +1,6 @@
 # TidyMac
 
-TidyMac räumt auf Knopfdruck deinen Home-Ordner oder ausgewählte Ordner auf: sortieren, Ordner anlegen, verschieben, umbenennen, Duplikate finden und Aufräum-Vorschläge machen. Oberster Grundsatz: **lieber etwas nicht sortieren, als etwas kaputt zu machen.** Nichts passiert ohne Vorschau und Bestätigung, nichts wird überschrieben, „Löschen“ heißt immer Papierkorb, und jeder Lauf lässt sich rückgängig machen.
+TidyMac räumt auf Knopfdruck oder einmal am Tag automatisch deinen Home-Ordner oder ausgewählte Ordner auf: sortieren, Ordner anlegen, verschieben, umbenennen, Duplikate finden, Aufräum- und Löschvorschläge machen. Oberster Grundsatz: **lieber etwas nicht sortieren, als etwas kaputt zu machen.** Nichts passiert ohne Vorschau und Bestätigung, nichts wird überschrieben, „Löschen“ heißt immer Papierkorb, und jeder Lauf lässt sich rückgängig machen.
 
 > **Einfach nur benutzen?** Lade die fertige App unter [Releases](https://github.com/Vyp3er/TidyMac/releases/latest) herunter und folge der [Installationsanleitung](INSTALL.md). Du brauchst einen Mac mit Apple Silicon und macOS 15 oder neuer. Claude ist optional: über dein eigenes Claude-Abo (Pro oder Max), einen API-Key oder gar nicht.
 
@@ -8,7 +8,7 @@ TidyMac gehört zu [MacTweaks](https://github.com/Vyp3er/MacTweaks), zusammen mi
 
 - Swift 5 + SwiftUI (AppKit wo nötig), macOS 15 oder neuer, Apple Silicon
 - Kein App Sandbox
-- Kernlogik als Swift Package `TidyCore` mit 66 Unit-Tests; App-Target `TidyMac` im Xcode-Projekt
+- Kernlogik als Swift Package `TidyCore` mit 77 Unit-Tests; App-Target `TidyMac` im Xcode-Projekt
 
 ## Projektstruktur
 
@@ -28,8 +28,8 @@ TidyMac/
     │   ├── Planning/          Hybrid-Planer (Dry-Run), Umbenennen
     │   ├── Execution/         Ausführen, SQLite-Journal, Rückgängig, ZIP-Archiv, Papierkorb
     │   ├── Duplicates/        Größe → Teil-Hash → SHA-256
-    │   ├── Cleanup/           Aufräum-Vorschläge
-    │   └── Background/        FSEvents-Watcher und Hintergrund-Modus
+    │   ├── Cleanup/           Aufräum-Vorschläge, Löschvorschläge (alte Dateien, KI-Bewertung)
+    │   └── Background/        FSEvents-Watcher, Hintergrund-Modus, tägliche Automatik
     ├── Sources/tidyctl/       Kommandozeilen-Werkzeug für Probeläufe in Test-Ordnern
     └── Tests/TidyCoreTests/   Unit-Tests (laufen ausschließlich in temporären Test-Ordnern)
 ```
@@ -101,9 +101,9 @@ Einstellungen, Journal und KI-Cache liegen in `~/Library/Application Support/Tid
 3. **Ausführen** – nur nach Bestätigung. Jede Aktion wird direkt davor erneut geprüft (Schutz, geöffnet?, Ziel erlaubt?). Namenskonflikte werden nie überschrieben, sondern Finder-artig umbenannt („Name 2.pdf“).
 4. **Rückgängig** – Banner direkt nach dem Lauf, Verlauf mit ganzen Läufen oder einzelnen Aktionen. Angelegte Ordner werden beim Rückgängigmachen wieder entfernt, wenn sie leer sind. Ist der ursprüngliche Platz inzwischen belegt, wird nicht überschrieben, sondern daneben eindeutig benannt.
 
-Weitere Bereiche: **Duplikate**, **Aufräum-Vorschläge**, **Zur Prüfung** (aus dem Hintergrund-Modus), **Geschützt** (was der letzte Scan geschützt hat und warum), **Verlauf**.
+Weitere Bereiche: **Duplikate**, **Aufräum-Vorschläge**, **Löschen** (alte Dateien, die Claude für entbehrlich hält, jede einzeln zu bestätigen), **Zur Prüfung** (aus Hintergrund-Modus und Automatik), **Geschützt** (was der letzte Scan geschützt hat und warum), **Verlauf**.
 
-**Menüleiste:** „Downloads aufräumen …“, „Ausgewählte Ordner aufräumen …“ (öffnen jeweils die Vorschau), „Zur Prüfung“, „Letzten Lauf rückgängig“, Hintergrund-Modus an/aus, Einstellungen.
+**Menüleiste:** „Downloads aufräumen …“, „Ausgewählte Ordner aufräumen …“ (öffnen jeweils die Vorschau), „Zur Prüfung“, „Letzten Lauf rückgängig“, Hintergrund-Modus an/aus, Automatik an/aus, Einstellungen.
 
 ## Schutzregeln – was niemals verschoben oder verändert wird
 
@@ -149,7 +149,7 @@ claude -p --output-format json --json-schema <Schema> --system-prompt <TidyMac-P
 - `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` u. ä. werden aus der Umgebung des Kindprozesses entfernt. Laut Anthropic würde Claude Code sonst stillschweigend über den API-Key abrechnen statt über das Abo. `--bare` wird bewusst nicht verwendet, weil es den Abo-Login ignoriert.
 - „Status prüfen“ in den Einstellungen nutzt `claude auth status` und zeigt, ob du über claude.ai (und mit welchem Plan) angemeldet bist.
 
-**Was aufs Nutzungskontingent geht:** Jeder Stapel (Standard: 20 Dateien) ist ein `claude -p`-Aufruf und zählt zu den Nutzungslimits deines Pro-Abos. Das sind das 5-Stunden-Limit und das Wochenlimit, geteilt mit claude.ai und Claude Code. Im Test kosteten 6 Dateien plus 1 Ordner (2 Aufrufe) zusammen etwa 5.100 Eingabe- und 600 Ausgabe-Tokens. Sparsam ist es, weil Regeln die eindeutigen Fälle ohne KI erledigen, Ergebnisse pro Datei (Inhalts-Hash + Änderungsdatum) gecacht werden, `--effort low` gesetzt ist und pro Lauf höchstens 300 Dateien an die KI gehen (einstellbar). Im Hintergrund-Modus ist die KI standardmäßig aus. Ist das Limit erreicht, bricht TidyMac die restlichen KI-Anfragen ab und nutzt nur die Regeln.
+**Was aufs Nutzungskontingent geht:** Jeder Stapel (Standard: 20 Dateien) ist ein `claude -p`-Aufruf und zählt zu den Nutzungslimits deines Pro-Abos. Das sind das 5-Stunden-Limit und das Wochenlimit, geteilt mit claude.ai und Claude Code. Im Test kosteten 6 Dateien plus 1 Ordner (2 Aufrufe) zusammen etwa 5.100 Eingabe- und 600 Ausgabe-Tokens. Sparsam ist es, weil Regeln die eindeutigen Fälle ohne KI erledigen, Ergebnisse pro Datei (Inhalts-Hash + Änderungsdatum) gecacht werden, `--effort low` gesetzt ist und pro Lauf höchstens 300 Dateien an die KI gehen (einstellbar). Löschvorschläge und die tägliche Automatik nutzen dieselben Grenzen und denselben Cache. Im Hintergrund-Modus ist die KI standardmäßig aus, in der Automatik abschaltbar. Ist das Limit erreicht, bricht TidyMac die restlichen KI-Anfragen ab und nutzt nur die Regeln.
 
 Einrichtung: Claude Code installieren (https://claude.com/claude-code), einmal im Terminal `claude` starten und mit dem Claude-Konto anmelden. TidyMac findet `claude` in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` usw. oder über den Pfad in den Einstellungen.
 
@@ -167,6 +167,8 @@ In den Einstellungen umschaltbar. Direkter Aufruf der Messages API (`POST /v1/me
 
 - **Duplikate:** Größe → Teil-Hash (erste/letzte 64 KB) → vollständiger SHA-256, parallel. Hardlinks zählen nicht als Duplikat. Projekte werden ignoriert. Behalten wird das Exemplar im sinnvollsten Ordner mit dem besten Namen; per Klick änderbar. Die übrigen gehen nach Bestätigung in den Papierkorb.
 - **Aufräum-Vorschläge:** große Dateien (≥ 500 MB), lange nicht geöffnete Dateien (Spotlight „zuletzt benutzt“, ≥ 365 Tage, ≥ 10 MB), alte Installer (≥ 30 Tage), leere Ordner, Reste (`.tmp`, `Thumbs.db`, alte Office-Sperrdateien), bereits entpackte Archive, abgebrochene Downloads. Pro Eintrag „Behalten“, „Papierkorb“ oder „Archivieren“ (geprüftes ZIP nach `~/Documents/Archiv/<Jahr-Monat>`, Original in den Papierkorb). Nichts davon passiert automatisch.
+- **Löschen (Löschvorschläge):** Sucht Dateien, die seit einem Jahr (einstellbar: 6 Monate bis 5 Jahre) weder geöffnet (Spotlight „zuletzt benutzt“) noch geändert oder abgelegt wurden. Ausgenommen sind Projektordner, zusammengehörige Ordner (Fotoserien, Alben, entpackte Archive), geschützte Bereiche und alles, was laut Datenschutz-Einstellungen nicht an die KI darf. Claude bewertet jede Datei mit „löschen“, „behalten“ oder „unklar“, mit Begründung und Sicherheit; vorgeschlagen wird nur „löschen“ ab 60 % (einstellbar). Ohne KI kommen nur eindeutige Fälle (alte Installer, temporäre Reste, bereits entpackte Archive). **Nichts ist vorausgewählt und es gibt kein „Alle auswählen“:** Jede Datei bestätigst du einzeln, dann geht sie in den Papierkorb (rückgängig im Verlauf). „Behalten“ merkt sich die Datei, solange sie unverändert bleibt.
+- **Automatik:** Einmal am Tag zur eingestellten Uhrzeit (Standard 10:00) werden die eingestellten Ordner (Standard: Downloads und Schreibtisch) gescannt und sortiert, mit Regeln und optional Claude. Automatisch ausgeführt werden nur Datei-Verschiebungen und -Umbenennungen ohne Warnung ab 90 % Konfidenz. Ordner verschieben, Papierkorb und Archivieren nie. Dateien, die sich in den letzten zwei Minuten geändert haben, bleiben bis zum nächsten Lauf liegen. Unsichere Vorschläge landen unter „Zur Prüfung“, Dateien ohne sicheres Ziel bleiben einfach liegen. War der Mac zur Uhrzeit aus oder im Ruhezustand, holt TidyMac den Lauf am selben Tag nach; wer die Automatik nachmittags einschaltet, startet am nächsten Tag. Danach kommt eine Mitteilung mit „Rückgängig“-Knopf. TidyMac muss dafür laufen (am besten „Beim Anmelden starten“). Ein- und ausschalten unter Einstellungen › Automatik oder im Menüleisten-Symbol.
 - **Hintergrund-Modus:** FSEvents beobachtet z. B. Downloads und Schreibtisch. Neue Dateien werden erst bearbeitet, wenn sie fertig sind: keine Download-Endung mehr, Größe und Datum stabil über die Wartezeit (Standard 60 s), nicht geöffnet. Automatisch einsortiert wird nur bei sicheren Regeln (≥ 90 %). Alles andere landet unter „Zur Prüfung“. Ordner werden nie automatisch bewegt. Danach kommt eine Mitteilung mit Zusammenfassung und „Rückgängig“-Knopf.
 
 ## tidyctl (Probeläufe auf der Kommandozeile)

@@ -117,11 +117,62 @@ public struct AIAvailability: Sendable, Hashable {
     }
 }
 
+/// One structured request: system prompt, user message (data) and the JSON schema of the answer.
+public struct AITask: Sendable, Hashable {
+    public var systemPrompt: String
+    public var userMessage: String
+    public var schemaJSON: String
+
+    public init(systemPrompt: String, userMessage: String, schemaJSON: String) {
+        self.systemPrompt = systemPrompt
+        self.userMessage = userMessage
+        self.schemaJSON = schemaJSON
+    }
+}
+
+/// The structured answer (a JSON object like `{"items": [...]}`) plus usage.
+public struct AIRawResult: Sendable {
+    public var json: Data
+    public var inputTokens: Int
+    public var outputTokens: Int
+    public var costUSD: Double
+
+    public init(json: Data, inputTokens: Int = 0, outputTokens: Int = 0, costUSD: Double = 0) {
+        self.json = json
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.costUSD = costUSD
+    }
+}
+
 public protocol AIProvider: Sendable {
     var displayName: String { get }
     var maxConcurrentRequests: Int { get }
+    /// Runs one structured task. Real providers implement this; the typed calls below build on it.
+    func perform(_ task: AITask) async throws -> AIRawResult
+    /// Sorting: target folder (and description) per file or folder.
     func suggest(_ request: AIRequest) async throws -> AIResponse
+    /// Deletion: is an old file probably no longer needed?
+    func assessDeletion(_ request: DeletionRequest) async throws -> DeletionResponse
     func checkAvailability() async -> AIAvailability
+}
+
+extension AIProvider {
+    public func perform(_ task: AITask) async throws -> AIRawResult {
+        throw AIError.notConfigured("\(displayName) unterstützt diese Anfrage nicht")
+    }
+
+    public func suggest(_ request: AIRequest) async throws -> AIResponse {
+        let raw = try await perform(PromptBuilder.task(for: request))
+        let items = try AIResponseParser.items(AISuggestion.self, from: raw.json)
+        return AIResponse(items: items, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, costUSD: raw.costUSD)
+    }
+
+    public func assessDeletion(_ request: DeletionRequest) async throws -> DeletionResponse {
+        let raw = try await perform(DeletionPrompt.task(for: request))
+        let items = try AIResponseParser.items(DeletionVerdict.self, from: raw.json)
+        return DeletionResponse(items: items, inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, costUSD: raw.costUSD)
+    }
 }
 
 // MARK: - Prompt
@@ -170,10 +221,16 @@ public enum PromptBuilder {
         ],
     ]
 
-    public static var outputSchemaJSON: String {
-        guard let data = try? JSONSerialization.data(withJSONObject: outputSchema, options: [.sortedKeys]),
+    public static var outputSchemaJSON: String { schemaString(outputSchema) }
+
+    static func schemaString(_ schema: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys]),
               let s = String(data: data, encoding: .utf8) else { return "{}" }
         return s
+    }
+
+    public static func task(for request: AIRequest) -> AITask {
+        AITask(systemPrompt: systemPrompt, userMessage: userMessage(for: request), schemaJSON: outputSchemaJSON)
     }
 
     public static func userMessage(for request: AIRequest) -> String {
@@ -191,10 +248,10 @@ public enum PromptBuilder {
 }
 
 public enum AIResponseParser {
-    struct Envelope: Decodable { let items: [AISuggestion] }
+    struct Envelope<T: Decodable>: Decodable { let items: [T] }
 
-    /// Parses `{"items": [...]}` from model text, tolerating code fences and surrounding prose.
-    public static func parse(text: String) throws -> [AISuggestion] {
+    /// Extracts the JSON object from model text, tolerating code fences and surrounding prose.
+    public static func jsonData(fromText text: String) throws -> Data {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasPrefix("```") {
             s = s.replacingOccurrences(of: #"^```[a-zA-Z]*\n?"#, with: "", options: .regularExpression)
@@ -203,21 +260,25 @@ public enum AIResponseParser {
         if let start = s.firstIndex(of: "{"), let end = s.lastIndex(of: "}"), start < end {
             s = String(s[start...end])
         }
-        guard let data = s.data(using: .utf8) else { throw AIError.invalidResponse("kein Text") }
+        guard let data = s.data(using: .utf8), !data.isEmpty else { throw AIError.invalidResponse("kein Text") }
+        return data
+    }
+
+    /// Decodes `{"items": [...]}`.
+    public static func items<T: Decodable>(_ type: T.Type, from data: Data) throws -> [T] {
         do {
-            return try JSONDecoder().decode(Envelope.self, from: data).items
+            return try JSONDecoder().decode(Envelope<T>.self, from: data).items
         } catch {
             throw AIError.invalidResponse("JSON nicht lesbar (\(error.localizedDescription))")
         }
     }
 
+    public static func parse(text: String) throws -> [AISuggestion] {
+        try items(AISuggestion.self, from: jsonData(fromText: text))
+    }
+
     public static func parse(object: Any) throws -> [AISuggestion] {
-        let data = try JSONSerialization.data(withJSONObject: object)
-        do {
-            return try JSONDecoder().decode(Envelope.self, from: data).items
-        } catch {
-            throw AIError.invalidResponse("Strukturierte Ausgabe nicht lesbar")
-        }
+        try items(AISuggestion.self, from: JSONSerialization.data(withJSONObject: object))
     }
 }
 
@@ -277,13 +338,21 @@ public final class AICache: @unchecked Sendable {
     }
 
     public func lookup(_ key: String) -> AISuggestion? {
-        guard let row = try? db.query("SELECT suggestion FROM ai_cache WHERE key = ?", [.text(key)]).first,
-              let json = row["suggestion"]?.string, let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(AISuggestion.self, from: data)
+        lookup(key, as: AISuggestion.self)
     }
 
     public func store(_ key: String, _ suggestion: AISuggestion) {
-        guard let data = try? JSONEncoder().encode(suggestion), let json = String(data: data, encoding: .utf8) else { return }
+        store(key, value: suggestion)
+    }
+
+    public func lookup<T: Decodable>(_ key: String, as type: T.Type) -> T? {
+        guard let row = try? db.query("SELECT suggestion FROM ai_cache WHERE key = ?", [.text(key)]).first,
+              let json = row["suggestion"]?.string, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    public func store<T: Encodable>(_ key: String, value: T) {
+        guard let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return }
         try? db.run("INSERT OR REPLACE INTO ai_cache (key, suggestion, created) VALUES (?, ?, ?)",
                     [.text(key), .text(json), .double(Date().timeIntervalSince1970)])
     }
@@ -294,5 +363,32 @@ public final class AICache: @unchecked Sendable {
 
     public func clear() {
         try? db.execute("DELETE FROM ai_cache;")
+    }
+
+    // MARK: Files the user chose to keep (never suggested for deletion again while unchanged)
+
+    private func ensureKeptTable() {
+        try? db.execute("CREATE TABLE IF NOT EXISTS kept_files (key TEXT PRIMARY KEY, created REAL NOT NULL);")
+    }
+
+    public func markKept(_ key: String) {
+        ensureKeptTable()
+        try? db.run("INSERT OR REPLACE INTO kept_files (key, created) VALUES (?, ?)",
+                    [.text(key), .double(Date().timeIntervalSince1970)])
+    }
+
+    public func isKept(_ key: String) -> Bool {
+        ensureKeptTable()
+        return ((try? db.query("SELECT key FROM kept_files WHERE key = ?", [.text(key)]))?.isEmpty == false)
+    }
+
+    public func keptCount() -> Int {
+        ensureKeptTable()
+        return Int((try? db.query("SELECT COUNT(*) AS n FROM kept_files").first?["n"]?.int) ?? 0)
+    }
+
+    public func clearKept() {
+        ensureKeptTable()
+        try? db.execute("DELETE FROM kept_files;")
     }
 }

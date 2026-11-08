@@ -52,12 +52,17 @@ public final class ClaudeCLIProvider: AIProvider, @unchecked Sendable {
 
     // MARK: Invocation
 
+    /// Arguments for the sorting task (kept for tests and diagnostics).
     var arguments: [String] {
+        arguments(schemaJSON: PromptBuilder.outputSchemaJSON, systemPrompt: PromptBuilder.systemPrompt)
+    }
+
+    func arguments(schemaJSON: String, systemPrompt: String) -> [String] {
         var args = [
             "-p",
             "--output-format", "json",
-            "--json-schema", PromptBuilder.outputSchemaJSON,
-            "--system-prompt", PromptBuilder.systemPrompt,
+            "--json-schema", schemaJSON,
+            "--system-prompt", systemPrompt,
             "--tools", "",                  // no file, shell or web tools: Claude only sees what we send
             "--strict-mcp-config",          // no MCP servers
             "--safe-mode",                  // no CLAUDE.md, hooks, plugins, skills
@@ -94,15 +99,22 @@ public final class ClaudeCLIProvider: AIProvider, @unchecked Sendable {
         return dir
     }
 
-    public func suggest(_ request: AIRequest) async throws -> AIResponse {
-        let input = PromptBuilder.userMessage(for: request)
-        let output = try await ProcessRunner.run(executable: executable, arguments: arguments, input: input,
-                                                 environment: Self.environment, workingDirectory: Self.workingDirectory(),
-                                                 timeout: timeout)
-        return try Self.parse(output)
+    public func perform(_ task: AITask) async throws -> AIRawResult {
+        let output = try await ProcessRunner.run(executable: executable,
+                                                 arguments: arguments(schemaJSON: task.schemaJSON, systemPrompt: task.systemPrompt),
+                                                 input: task.userMessage, environment: Self.environment,
+                                                 workingDirectory: Self.workingDirectory(), timeout: timeout)
+        return try Self.parseRaw(output)
     }
 
+    /// Sorting answer (used by tests).
     static func parse(_ output: ProcessOutput) throws -> AIResponse {
+        let raw = try parseRaw(output)
+        return AIResponse(items: try AIResponseParser.items(AISuggestion.self, from: raw.json),
+                          inputTokens: raw.inputTokens, outputTokens: raw.outputTokens, costUSD: raw.costUSD)
+    }
+
+    static func parseRaw(_ output: ProcessOutput) throws -> AIRawResult {
         let stdout = String(data: output.stdout, encoding: .utf8) ?? ""
         let json = (try? JSONSerialization.jsonObject(with: output.stdout)) as? [String: Any]
             ?? lastJSONLine(stdout)
@@ -115,17 +127,17 @@ public final class ClaudeCLIProvider: AIProvider, @unchecked Sendable {
         if isError || output.status != 0 {
             throw classify(message: resultText.isEmpty ? (json["subtype"] as? String ?? "Fehler") : resultText, status: output.status)
         }
-        let items: [AISuggestion]
-        if let structured = json["structured_output"] {
-            items = try AIResponseParser.parse(object: structured)
+        let data: Data
+        if let structured = json["structured_output"], JSONSerialization.isValidJSONObject(structured) {
+            data = try JSONSerialization.data(withJSONObject: structured)
         } else {
-            items = try AIResponseParser.parse(text: resultText)
+            data = try AIResponseParser.jsonData(fromText: resultText)
         }
         let usage = json["usage"] as? [String: Any] ?? [:]
         let input = (usage["input_tokens"] as? Int ?? 0) + (usage["cache_read_input_tokens"] as? Int ?? 0)
             + (usage["cache_creation_input_tokens"] as? Int ?? 0)
-        return AIResponse(items: items, inputTokens: input, outputTokens: usage["output_tokens"] as? Int ?? 0,
-                          costUSD: json["total_cost_usd"] as? Double ?? 0)
+        return AIRawResult(json: data, inputTokens: input, outputTokens: usage["output_tokens"] as? Int ?? 0,
+                           costUSD: json["total_cost_usd"] as? Double ?? 0)
     }
 
     static func lastJSONLine(_ text: String) -> [String: Any]? {

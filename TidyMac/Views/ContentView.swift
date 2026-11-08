@@ -9,7 +9,7 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: $model.selection) {
                 Section("TidyMac") {
-                    ForEach([SidebarItem.sort, .duplicates, .cleanup]) { item in
+                    ForEach([SidebarItem.sort, .duplicates, .cleanup, .deletion]) { item in
                         Label(item.title, systemImage: item.symbol).tag(item)
                     }
                 }
@@ -31,6 +31,7 @@ struct ContentView: View {
             case .sort: SortView()
             case .duplicates: DuplicatesView()
             case .cleanup: CleanupView()
+            case .deletion: DeletionView()
             case .review: ReviewView()
             case .protected: ProtectedView()
             case .history: HistoryView()

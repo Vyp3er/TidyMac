@@ -4,7 +4,7 @@ import SwiftUI
 import TidyCore
 
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-    case sort, duplicates, cleanup, review, protected, history
+    case sort, duplicates, cleanup, deletion, review, protected, history
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .sort: return "Aufräumen"
         case .duplicates: return "Duplikate"
         case .cleanup: return "Aufräum-Vorschläge"
+        case .deletion: return "Löschen"
         case .review: return "Zur Prüfung"
         case .protected: return "Geschützt"
         case .history: return "Verlauf"
@@ -24,6 +25,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .sort: return "wand.and.stars"
         case .duplicates: return "doc.on.doc"
         case .cleanup: return "trash.slash"
+        case .deletion: return "trash"
         case .review: return "tray.full"
         case .protected: return "lock.shield"
         case .history: return "clock.arrow.circlepath"
@@ -72,6 +74,9 @@ final class AppModel {
                 || settings.ai.apiModel != oldValue.ai.apiModel {
                 aiStatus = nil
             }
+            if settings.schedule != oldValue.schedule {
+                configureSchedule(switchedOn: settings.schedule.enabled && !oldValue.schedule.enabled)
+            }
         }
     }
 
@@ -81,6 +86,7 @@ final class AppModel {
 
     // Navigation
     var selection: SidebarItem? = .sort
+    var settingsTab = "general"
     var showOnboarding = false
 
     // Scan & plan
@@ -106,6 +112,18 @@ final class AppModel {
     var hasSearchedDuplicates = false
     var hasSearchedCleanup = false
 
+    // Deletion ("Löschen")
+    var deletionSuggestions: [DeletionSuggestion] = []
+    var deletionReport: DeletionReport?
+    var hasSearchedDeletion = false
+    var keptCount = 0
+
+    // Daily automation
+    let schedule = ScheduleService()
+    var isAutomationRunning = false
+    var automationSummary: String?
+    var automationLastRun: Date?
+
     // Review & history
     var reviewItems: [ReviewItem] = []
     var runs: [RunRecord] = []
@@ -130,7 +148,12 @@ final class AppModel {
             self?.selection = .review
             NSApp.activate()
         }
+        keptCount = env.makeCache()?.keptCount() ?? 0
+        schedule.load(from: env.supportDirectory.appendingPathComponent("schedule-state.json"))
+        automationSummary = schedule.state.lastSummary
+        automationLastRun = schedule.state.lastRun
         configureBackground()
+        configureSchedule(switchedOn: false)
     }
 
     var environment: TidyEnvironment {
@@ -415,6 +438,155 @@ final class AppModel {
         execute(chosen, title: "Aufräum-Vorschläge umgesetzt") { [weak self] _ in
             guard let self else { return }
             self.cleanupSuggestions.removeAll { s in s.choice != .keep && !PathUtil.exists(s.url) }
+        }
+    }
+
+    // MARK: Deletion ("Löschen")
+
+    func findDeletionCandidates() {
+        guard !isWorking else { return }
+        isWorking = true
+        workTitle = "Löschvorschläge"
+        progressText = "Scanne …"
+        progressCount = 0
+        errorMessage = nil
+        cancelFlag.reset()
+        let env = environment
+        let target = currentTarget
+        let flag = cancelFlag
+        let now = DebugOptions.now
+        Task {
+            let progress: @Sendable (ScanProgress) -> Void = { p in
+                Task { @MainActor in
+                    AppModel.shared.progressCount = p.scannedItems
+                    AppModel.shared.progressText = p.currentPath.isEmpty ? p.phase : "\(p.phase): \(p.currentPath)"
+                }
+            }
+            let textProgress: @Sendable (String) -> Void = { text in
+                Task { @MainActor in AppModel.shared.progressText = text }
+            }
+            let report = await Task.detached(priority: .userInitiated) { () -> DeletionReport in
+                let policy = env.makePolicy()
+                let scan = await env.makeScanner(policy: policy).scan(target, progress: progress, isCancelled: { flag.isSet })
+                if flag.isSet { return DeletionReport() }
+                let provider = env.makeProvider()
+                var report = await env.makeDeletionAdvisor(provider: provider, now: now)
+                    .analyze(scan: scan, progress: textProgress, isCancelled: { flag.isSet })
+                if env.settings.ai.provider != .off && provider == nil {
+                    report.notes.insert("KI nicht verfügbar (\(env.settings.ai.provider.displayName)) – nur eindeutige Fälle per Regel.", at: 0)
+                }
+                return report
+            }.value
+            if !flag.isSet {
+                self.deletionReport = report
+                self.deletionSuggestions = report.suggestions
+                self.hasSearchedDeletion = true
+            }
+            self.isWorking = false
+            self.keptCount = env.makeCache()?.keptCount() ?? 0
+            self.cacheCount = env.makeCache()?.count() ?? 0
+        }
+    }
+
+    func deletionConfirmBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { self.deletionSuggestions.first { $0.id == id }?.isConfirmed ?? false },
+            set: { newValue in
+                if let i = self.deletionSuggestions.firstIndex(where: { $0.id == id }) { self.deletionSuggestions[i].isConfirmed = newValue }
+            })
+    }
+
+    var confirmedDeletions: [DeletionSuggestion] { deletionSuggestions.filter(\.isConfirmed) }
+    var confirmedDeletionBytes: Int64 { confirmedDeletions.reduce(0) { $0 + $1.size } }
+
+    /// Only the individually confirmed files go to the Trash (undoable in "Verlauf").
+    func deleteConfirmed() {
+        let chosen = DeletionAdvisor(home: home, settings: settings.deletion, aiSettings: settings.ai, provider: nil, cache: nil)
+            .actions(for: deletionSuggestions)
+        guard !chosen.isEmpty else { return }
+        execute(chosen, title: "Gelöscht (Papierkorb): \(chosen.count) Datei\(chosen.count == 1 ? "" : "en")") { [weak self] _ in
+            self?.deletionSuggestions.removeAll { $0.isConfirmed && !PathUtil.exists($0.url) }
+        }
+    }
+
+    /// "Behalten": remembered, so the file is not suggested again while it stays unchanged.
+    func keepDeletionSuggestion(_ id: UUID) {
+        guard let suggestion = deletionSuggestions.first(where: { $0.id == id }) else { return }
+        environment.makeCache()?.markKept(suggestion.keepKey)
+        deletionSuggestions.removeAll { $0.id == id }
+        keptCount += 1
+    }
+
+    func resetKept() {
+        environment.makeCache()?.clearKept()
+        keptCount = 0
+    }
+
+    // MARK: Daily automation
+
+    func configureSchedule(switchedOn: Bool) {
+        if switchedOn {
+            // Switching on after today's time starts tomorrow, not right away.
+            schedule.update { $0.enabledAt = Date() }
+            if settings.schedule.notify { NotificationManager.shared.requestAuthorization() }
+        }
+        schedule.configure(enabled: settings.schedule.enabled) { [weak self] in self?.checkSchedule() }
+    }
+
+    func checkSchedule(now: Date = Date()) {
+        let s = settings.schedule
+        guard s.enabled, !isWorking, !isAutomationRunning,
+              DailySchedule.isDue(now: now, lastRun: schedule.state.lastRun, enabledAt: schedule.state.enabledAt,
+                                  hour: s.hour, minute: s.minute) else { return }
+        runAutomation(manual: false)
+    }
+
+    var nextAutomationRun: Date? {
+        let s = settings.schedule
+        guard s.enabled else { return nil }
+        return DailySchedule.nextRun(now: Date(), lastRun: automationLastRun, enabledAt: schedule.state.enabledAt,
+                                     hour: s.hour, minute: s.minute)
+    }
+
+    /// One automatic run over the configured folders. Manual runs ("Jetzt ausführen") do not
+    /// count as the day's scheduled run.
+    func runAutomation(manual: Bool) {
+        guard let journal, !isWorking, !isAutomationRunning else { return }
+        let folders = settings.schedule.folders.map { home.expand($0) }
+        guard !folders.isEmpty else {
+            errorMessage = "Für die Automatik ist kein Ordner eingestellt."
+            return
+        }
+        let started = Date()
+        if !manual {
+            schedule.update { $0.lastRun = started }
+            automationLastRun = started
+        }
+        isAutomationRunning = true
+        isWorking = true
+        workTitle = "Automatik"
+        progressText = "Räume \(folders.map(\.lastPathComponent).joined(separator: ", ")) auf …"
+        cancelFlag.reset()
+        let env = environment
+        let flag = cancelFlag
+        let now = DebugOptions.now
+        Task {
+            let outcome = await Task.detached(priority: .utility) {
+                await env.makeAutoSorter(journal: journal).run(folders: folders, now: now, isCancelled: { flag.isSet })
+            }.value
+            self.isAutomationRunning = false
+            self.isWorking = false
+            let summary = outcome.summary.isEmpty ? "nichts zu tun" : outcome.summary
+            let text = started.formatted(date: .abbreviated, time: .shortened) + ": " + summary
+            self.schedule.update { $0.lastSummary = text }
+            self.automationSummary = text
+            self.refreshReview()
+            self.refreshHistory()
+            guard self.settings.schedule.notify, !outcome.summary.isEmpty else { return }
+            let names = outcome.moved.prefix(3).map { $0.finalName }.joined(separator: ", ")
+            NotificationManager.shared.post(title: "TidyMac Automatik: \(outcome.summary)",
+                                            body: names.isEmpty ? "Siehe „Zur Prüfung“." : names + (outcome.moved.count > 3 ? " …" : ""),
+                                            runID: outcome.runID)
         }
     }
 
