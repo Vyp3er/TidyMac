@@ -26,6 +26,9 @@ public final class Planner: @unchecked Sendable {
     public let privacy: PrivacyFilter
     public let renamer: Renamer
     public var now: () -> Date = { Date() }
+    /// Inboxes that are emptied into `documentsRoot` (e.g. Downloads → Documents).
+    public let documentsInboxes: [URL]
+    public let documentsRoot: URL
 
     public init(home: HomeContext, policy: ProtectionPolicy, engine: RuleEngine, structure: StructureIndex,
                 provider: AIProvider?, cache: AICache?, general: GeneralSettings, aiSettings: AISettings) {
@@ -39,6 +42,57 @@ public final class Planner: @unchecked Sendable {
         self.aiSettings = aiSettings
         self.privacy = PrivacyFilter(home: home, settings: aiSettings)
         self.renamer = Renamer(scheme: general.renameScheme, mediaWithDate: general.renameMediaWithDate)
+        self.documentsInboxes = general.inboxToDocuments.filter { !$0.isEmpty }.map { PathUtil.normalizeRoot(home.expand($0)) }
+        let root = PathUtil.normalizeRoot(home.expand(general.documentsRoot))
+        self.documentsRoot = home.contains(root) && !PathUtil.isSame(root, home.home) ? root : PathUtil.normalizeRoot(home.documents)
+    }
+
+    /// Files directly inside such an inbox must leave it (sorted into Documents).
+    func isDocumentsInbox(_ folder: URL) -> Bool {
+        documentsInboxes.contains { PathUtil.isSame($0, folder) } && !PathUtil.isDescendant(folder, of: documentsRoot)
+    }
+
+    static let screenshotName = try? NSRegularExpression(pattern: #"^(Bildschirmfoto|Screenshot|Screen Shot|CleanShot) \d{4}-\d{2}-\d{2}"#, options: [.caseInsensitive])
+    static let recordingName = try? NSRegularExpression(pattern: #"^(Bildschirmaufnahme|Screen Recording|Bildschirmaufzeichnung)"#, options: [.caseInsensitive])
+
+    static func matches(_ re: NSRegularExpression?, _ s: String) -> Bool {
+        guard let re else { return false }
+        return re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+    }
+
+    /// Category folder under Documents by file type, used when nothing better is known.
+    func documentsCategory(for item: FileItem) -> RuleMatch {
+        let template: String
+        let confidence: Double
+        let name: String
+        if item.isScreenshot || (item.kind == .image && Self.matches(Self.screenshotName, item.name)) {
+            (template, confidence, name) = ("Bilder/Bildschirmfotos/{year}", 0.95, "Bildschirmfotos")
+        } else if item.kind == .video && Self.matches(Self.recordingName, item.name) {
+            (template, confidence, name) = ("Videos/Bildschirmaufnahmen/{year}", 0.95, "Bildschirmaufnahmen")
+        } else if item.looksLikeCameraPhoto {
+            (template, confidence, name) = ("Bilder/Fotos/{year}", 0.88, "Fotos")
+        } else {
+            switch item.kind {
+            case .image, .rawImage: (template, confidence, name) = ("Bilder", 0.8, "Bilder")
+            case .video: (template, confidence, name) = ("Videos", 0.8, "Videos")
+            case .audio: (template, confidence, name) = ("Audio", 0.8, "Audio")
+            case .archive: (template, confidence, name) = ("Archive", 0.75, "Archive")
+            case .code: (template, confidence, name) = ("Code", 0.75, "Code")
+            case .ebook: (template, confidence, name) = ("Bücher", 0.9, "Bücher")
+            case .font: (template, confidence, name) = ("Schriften", 0.88, "Schriften")
+            case .model3D: (template, confidence, name) = ("3D-Modelle", 0.85, "3D-Modelle")
+            case .spreadsheet: (template, confidence, name) = ("Tabellen", 0.7, "Tabellen")
+            case .presentation: (template, confidence, name) = ("Präsentationen", 0.7, "Präsentationen")
+            case .pdf, .document, .text: (template, confidence, name) = ("Unterlagen", 0.7, "Unterlagen")
+            case .calendar, .contact: (template, confidence, name) = ("Kontakte und Termine", 0.8, "Kontakte und Termine")
+            case .installer, .diskImage, .torrent, .other: (template, confidence, name) = ("Sonstiges", 0.65, "Sonstiges")
+            }
+        }
+        let rendered = TemplateRenderer.render(template, item: item)
+        let folder = engine.resolver.resolve(documentsRoot.appendingPathComponent(rendered, isDirectory: true))
+        let rule = SortRule(id: "documents.category", name: "Kategorie \(name)", conditions: [],
+                            destination: home.abbreviate(documentsRoot) + "/" + template, confidence: confidence, isBuiltIn: true)
+        return RuleMatch(rule: rule, destinationFolder: folder, newName: nil, confidence: confidence, isUserRule: false)
     }
 
     struct Decision {
@@ -57,6 +111,7 @@ public final class Planner: @unchecked Sendable {
         var hint: RuleMatch?
         var needsName: Bool
         var cacheKey: String?
+        var mustMove = false
     }
 
     // MARK: Plan
@@ -88,17 +143,27 @@ public final class Planner: @unchecked Sendable {
                 continue
             }
 
-            let match = engine.match(item, now: now())
+            let mustMove = isDocumentsInbox(item.parent)
+            if mustMove, RedundancyDetector.quickReason(for: item) != nil {
+                // Installers, leftovers, extracted archives: not worth a place in Documents → "Löschen".
+                plan.disposable.append(item)
+                continue
+            }
+            var match = engine.match(item, now: now())
+            if mustMove, !(match?.isUserRule ?? false),
+               match.map({ !PathUtil.isDescendant($0.destinationFolder, of: documentsRoot, orEqual: false) }) ?? true {
+                match = documentsCategory(for: item)
+            }
             let aiAllowed = aiActive && privacy.allows(item.url)
             if let m = match, m.isUserRule || m.confidence >= general.certainThreshold || !aiAllowed {
                 // Document with a meaningless name but a certain rule: still ask the AI for a description.
                 if needsName && aiAllowed && item.kind.hasReadableText && !m.isUserRule {
-                    aiJobs.append(AIJob(item: item, hint: m, needsName: true))
+                    aiJobs.append(AIJob(item: item, hint: m, needsName: true, mustMove: mustMove))
                     continue
                 }
                 decisions.append(ruleDecision(item, m))
             } else if aiAllowed {
-                aiJobs.append(AIJob(item: item, hint: match, needsName: needsName))
+                aiJobs.append(AIJob(item: item, hint: match, needsName: needsName, mustMove: mustMove))
             } else {
                 if needsName && item.kind.isMedia && general.renameMediaWithDate {
                     decisions.append(Decision(item: item, folder: nil, description: nil, confidence: 0.8,
@@ -120,10 +185,13 @@ public final class Planner: @unchecked Sendable {
                     plan.notes.append("\(folder.name) bleibt liegen: \(blocked)")
                     continue
                 }
-                if let (dest, conf, reason) = folderRule(folder) {
+                let mustMove = isDocumentsInbox(folder.url.deletingLastPathComponent())
+                if let (dest, conf, reason) = mustMove ? documentsFolderRule(folder) : folderRule(folder) {
                     folderDecisions.append((folder, dest, conf, reason, .builtInRule(folder.kind.displayName)))
                 } else if aiActive && privacy.allows(folder.url) {
                     aiFolders.append(folder)
+                } else if mustMove {
+                    folderDecisions.append((folder, documentsFallbackFolder, 0.6, "Ordner aus Downloads", .builtInRule("Kategorie Sonstiges")))
                 }
             }
         }
@@ -158,10 +226,14 @@ public final class Planner: @unchecked Sendable {
         }
         plan.actions = actions.sorted { ($0.group, $0.source.lastPathComponent) < ($1.group, $1.source.lastPathComponent) }
         // Everything without an action is reported as "not assigned".
-        let handled = Set(actions.map { PathUtil.path($0.source) })
+        let handled = Set(actions.map { PathUtil.path($0.source) }).union(plan.disposable.map { PathUtil.path($0.url) })
         let alreadyListed = Set(plan.unsorted.map { PathUtil.path($0.url) })
         plan.unsorted += candidates.filter { !handled.contains(PathUtil.path($0.url)) && !alreadyListed.contains(PathUtil.path($0.url)) }
         plan.unsorted = plan.unsorted.filter { !handled.contains(PathUtil.path($0.url)) }
+        if !plan.disposable.isEmpty {
+            let n = plan.disposable.count
+            plan.notes.append("\(n) Datei\(n == 1 ? "" : "en") in Downloads \(n == 1 ? "ist" : "sind") überflüssig (Installer, entpackte Archive, Reste) und \(n == 1 ? "bleibt" : "bleiben") für „Löschen“ liegen.")
+        }
         return plan
     }
 
@@ -171,6 +243,26 @@ public final class Planner: @unchecked Sendable {
         Decision(item: item, folder: m.destinationFolder, description: nil, confidence: m.confidence,
                  reason: "Regel „\(m.rule.name)“", origin: m.isUserRule ? .userRule(m.rule.name) : .builtInRule(m.rule.name),
                  ruleNewName: m.newName)
+    }
+
+    var documentsFallbackFolder: URL {
+        engine.resolver.resolve(documentsRoot.appendingPathComponent("Sonstiges", isDirectory: true))
+    }
+
+    /// Folders from an inbox that is emptied into Documents.
+    func documentsFolderRule(_ folder: FolderItem) -> (URL, Double, String)? {
+        switch folder.kind {
+        case .photoSeries:
+            return (engine.resolver.resolve(documentsRoot.appendingPathComponent("Bilder", isDirectory: true)), 0.75, "Ordner enthält eine Fotoserie")
+        case .musicAlbum:
+            return (engine.resolver.resolve(documentsRoot.appendingPathComponent("Audio/Alben", isDirectory: true)), 0.75, "Ordner enthält ein Musikalbum")
+        case .website:
+            return (engine.resolver.resolve(documentsRoot.appendingPathComponent("Websites", isDirectory: true)), 0.6, "Ordner enthält eine Website")
+        case .project:
+            return folderRule(folder)
+        case .extractedArchive, .submission, .generic:
+            return nil
+        }
     }
 
     func folderRule(_ folder: FolderItem) -> (URL, Double, String)? {
@@ -203,7 +295,7 @@ public final class Planner: @unchecked Sendable {
             id: id, name: item.name, path: home.abbreviate(item.parent), kind: item.kind.displayName,
             sizeKB: Int(item.size / 1024), created: (item.contentCreated ?? item.created).map { df.string(from: $0) },
             modified: item.modified.map { df.string(from: $0) }, source: item.sourceDomain, needsName: job.needsName,
-            ruleHint: hint, excerpt: excerpt)
+            ruleHint: hint, excerpt: excerpt, mustMove: job.mustMove ? true : nil)
     }
 
     func runAI(provider: AIProvider, jobs: [AIJob], folders: [FolderItem],
@@ -218,7 +310,7 @@ public final class Planner: @unchecked Sendable {
         // 1. Cache
         var pending: [AIJob] = []
         for var job in jobs {
-            job.cacheKey = cache != nil ? AICache.key(for: job.item, needsName: job.needsName) : nil
+            job.cacheKey = cache != nil ? AICache.key(for: job.item, needsName: job.needsName, mustMove: job.mustMove) : nil
             if let key = job.cacheKey, let cached = cache?.lookup(key) {
                 stats.cacheHits += 1
                 decisions.append(contentsOf: decision(from: cached, job: job))
@@ -263,7 +355,8 @@ public final class Planner: @unchecked Sendable {
                 map[id] = folder
                 descs.append(AIFolderDescriptor(id: id, name: folder.name, path: home.abbreviate(folder.url.deletingLastPathComponent()),
                                                 kind: folder.kind.displayName, fileCount: folder.fileCount,
-                                                sampleNames: Array(folder.sampleNames.prefix(12))))
+                                                sampleNames: Array(folder.sampleNames.prefix(12)),
+                                                mustMove: isDocumentsInbox(folder.url.deletingLastPathComponent()) ? true : nil))
             }
             batches.append((AIRequest(today: today, existingFolders: structureList, files: [], folders: descs), [:], map))
         }
@@ -322,8 +415,12 @@ public final class Planner: @unchecked Sendable {
                     } else if let folder = folderMap[suggestion.id] {
                         answered.insert(suggestion.id)
                         let target = suggestion.targetFolder.trimmingCharacters(in: .whitespaces)
-                        if !target.isEmpty, let url = parseTarget(target) {
+                        let mustMove = isDocumentsInbox(folder.url.deletingLastPathComponent())
+                        if !target.isEmpty, let url = parseTarget(target),
+                           !mustMove || PathUtil.isDescendant(url, of: documentsRoot, orEqual: false) {
                             folderDecisions.append((folder, url, clamp(suggestion.confidence), suggestion.reason, .ai))
+                        } else if mustMove {
+                            folderDecisions.append((folder, documentsFallbackFolder, 0.6, "Ordner aus Downloads", .builtInRule("Kategorie Sonstiges")))
                         }
                     }
                 }
@@ -363,6 +460,19 @@ public final class Planner: @unchecked Sendable {
             return [d]
         }
         let target = s.targetFolder.trimmingCharacters(in: .whitespaces)
+        if job.mustMove {
+            // Inbox files must end up under Documents; otherwise the category by type decides.
+            let parsed = target.isEmpty ? nil : parseTarget(target)
+            if let url = parsed, PathUtil.isDescendant(url, of: documentsRoot, orEqual: false) {
+                return [Decision(item: job.item, folder: url, description: job.needsName ? s.description : nil,
+                                 confidence: clamp(s.confidence), reason: s.reason.isEmpty ? "Vorschlag von Claude" : s.reason, origin: .ai)]
+            }
+            if let hint = job.hint {
+                var d = ruleDecision(job.item, hint)
+                d.description = job.needsName ? s.description : nil
+                return [d]
+            }
+        }
         var folder: URL?
         if !target.isEmpty {
             folder = parseTarget(target)
@@ -465,6 +575,21 @@ public final class Planner: @unchecked Sendable {
                   let f = action.destinationFolder, !PathUtil.exists(f),
                   (counts[PathUtil.path(f)] ?? 0) < minimum else { return action }
             var a = action
+            if isDocumentsInbox(action.source.deletingLastPathComponent()) {
+                // Emptying an inbox: a new category folder is fine even for one file; deeper new
+                // levels only when several files share them.
+                let existing = PathUtil.deepestExistingAncestor(of: f)
+                var target = f
+                while (PathUtil.depth(of: target, below: existing) ?? 0) > 1 && (counts[PathUtil.path(target)] ?? 0) < minimum {
+                    target = target.deletingLastPathComponent()
+                }
+                if PathUtil.isSame(target, f) { return action }
+                a.destinationFolder = target
+                a.group = group(for: a.kind, folder: target)
+                a.confidence *= 0.95
+                a.reason += " (in „\(target.lastPathComponent)“ statt eines neuen Unterordners für nur eine Datei)"
+                return a
+            }
             // Walk up to the highest new folder that still has enough files, or the existing parent.
             var target = f.deletingLastPathComponent()
             while !PathUtil.exists(target) && (counts[PathUtil.path(target)] ?? 0) < minimum {

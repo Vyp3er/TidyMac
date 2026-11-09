@@ -22,13 +22,17 @@ public struct GeneralSettings: Codable, Sendable, Hashable {
     public var maxNewFolderDepth = 3
     public var startHidden = false
     public var onboardingDone = false
+    /// Inbox folders that are emptied completely: every file gets a place under `documentsRoot`
+    /// (category folders are created as needed). Disposable files stay for "Löschen".
+    public var inboxToDocuments: [String] = ["~/Downloads"]
+    public var documentsRoot = "~/Documents"
 
     public init() {}
 
     enum CodingKeys: String, CodingKey {
         case selectedFolders, includeSubfolderFiles, maxSubfolderDepth, renameEnabled, renameScheme,
              renameMediaWithDate, certainThreshold, selectThreshold, minFilesForNewFolder, maxNewFolderDepth,
-             startHidden, onboardingDone
+             startHidden, onboardingDone, inboxToDocuments, documentsRoot
     }
 
     public init(from decoder: Decoder) throws {
@@ -46,6 +50,8 @@ public struct GeneralSettings: Codable, Sendable, Hashable {
         maxNewFolderDepth = c.value(.maxNewFolderDepth, d.maxNewFolderDepth)
         startHidden = c.value(.startHidden, d.startHidden)
         onboardingDone = c.value(.onboardingDone, d.onboardingDone)
+        inboxToDocuments = c.value(.inboxToDocuments, d.inboxToDocuments)
+        documentsRoot = c.value(.documentsRoot, d.documentsRoot)
     }
 }
 
@@ -212,17 +218,23 @@ public struct CleanupSettings: Codable, Sendable, Hashable {
 public struct DeletionSettings: Codable, Sendable, Hashable {
     /// A file counts as old when it was neither opened nor changed for this many days.
     public var minAgeDays = 365
+    /// In Downloads (a place for temporary things) files count as old much earlier.
+    public var downloadsMinAgeDays = 90
+    /// Installers of apps that are not (recognizably) installed are suggested after this many days.
+    public var installerAgeDays = 7
     /// Claude's verdict must be at least this sure before a file is suggested.
     public var minConfidence = 0.6
 
     public init() {}
 
-    enum CodingKeys: String, CodingKey { case minAgeDays, minConfidence }
+    enum CodingKeys: String, CodingKey { case minAgeDays, downloadsMinAgeDays, installerAgeDays, minConfidence }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = DeletionSettings()
         minAgeDays = c.value(.minAgeDays, d.minAgeDays)
+        downloadsMinAgeDays = c.value(.downloadsMinAgeDays, d.downloadsMinAgeDays)
+        installerAgeDays = c.value(.installerAgeDays, d.installerAgeDays)
         minConfidence = c.value(.minConfidence, d.minConfidence)
     }
 }

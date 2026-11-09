@@ -84,6 +84,7 @@ struct OnboardingView: View {
             Label("Willkommen bei TidyMac", systemImage: "wand.and.stars").font(.title.bold())
             Text("TidyMac räumt deinen Home-Ordner oder ausgewählte Ordner auf: sortieren, Ordner anlegen, verschieben, umbenennen.")
             VStack(alignment: .leading, spacing: 8) {
+                Label("Downloads wird komplett in „Dokumente“ einsortiert, mit passenden Ordnern", systemImage: "tray.and.arrow.down")
                 Label("Erst Vorschau, dann nur nach deiner Bestätigung ausführen", systemImage: "eye")
                 Label("Projektordner (Git, Xcode, Node, Python, LaTeX …) bleiben unangetastet", systemImage: "hammer")
                 Label("Library, versteckte Dateien, Apps, Cloud-Ordner und Links sind tabu", systemImage: "lock.shield")

@@ -90,20 +90,25 @@ Fang am besten klein an:
 
 1. Links **„Aufräumen“** wählen, oben **„Ausgewählte Ordner“**, und nur deinen Ordner **Downloads** in der Liste lassen.
 2. Auf **„Scannen & Vorschau“** klicken. Das liest nur, es wird noch nichts verändert.
-3. Sieh dir die Vorschau an: Jede geplante Aktion steht mit Ziel, Begründung und Sicherheit (in Prozent) da. Unsichere Vorschläge und solche mit Warnung sind schon abgewählt. Du kannst einzelne Aktionen ab- oder anwählen, das Ziel ändern oder einen anderen Namen eintragen. Über den Umschalter oben siehst du die Ordner vorher und nachher als Baum.
+3. Sieh dir die Vorschau an. Aus Downloads bekommt jede Datei einen Platz in **„Dokumente“**, in passenden Ordnern wie Finanzen, Uni, Wohnung oder Bilder. Fehlende Ordner legt TidyMac an. Installer und bereits entpackte Archive bleiben liegen, du findest sie unter „Löschen“. Jede geplante Aktion steht mit Ziel, Begründung und Sicherheit (in Prozent) da. Unsichere Vorschläge und solche mit Warnung sind schon abgewählt. Du kannst einzelne Aktionen ab- oder anwählen, das Ziel ändern oder einen anderen Namen eintragen. Über den Umschalter oben siehst du die Ordner vorher und nachher als Baum.
 4. Klicke auf **„Ausführen“** und bestätige.
 5. Gefällt dir etwas nicht: direkt im Banner auf **„Rückgängig“** klicken, oder später links unter **„Verlauf“** einen ganzen Lauf oder einzelne Aktionen zurücknehmen.
 
 Was TidyMac nie tut: Dateien überschreiben (bei gleichem Namen heißt die neue Datei „Name 2.pdf“), endgültig löschen („Löschen“ heißt immer Papierkorb), in Projektordnern (Git, Xcode, Node, Python, LaTeX …) etwas verändern, `~/Library`, versteckte Dateien, Programme oder Cloud-Ordner anfassen. Was beim letzten Scan geschützt wurde und warum, steht links unter **„Geschützt“**.
 
-## 6. Alte Dateien löschen
+## 6. Überflüssige und alte Dateien löschen
 
-Links unter **„Löschen“** klickst du auf **„Alte Dateien prüfen“**. TidyMac sucht Dateien, die du seit über einem Jahr weder geöffnet noch geändert hast, und Claude schätzt ein, ob du sie noch brauchst. Projektordner, Fotoserien, Alben und geschützte Bereiche bleiben außen vor.
+Links unter **„Löschen“** klickst du auf **„Dateien prüfen“**. TidyMac zeigt zwei Gruppen:
+
+- **Überflüssig:** bereits entpackte Archive (das ZIP, wenn der Ordner daneben schon alles enthält), Installer bereits installierter Apps, identische „(1)“-Kopien, Reste und abgebrochene Downloads, egal wie alt.
+- **Alt:** Dateien, die du lange weder geöffnet noch geändert hast (in Downloads seit 3 Monaten, sonst seit einem Jahr). Claude schätzt ein, ob du sie noch brauchst.
+
+Projektordner, Fotoserien, Alben und geschützte Bereiche bleiben außen vor.
 
 - Nichts ist vorausgewählt. Setze bei jeder Datei, die wirklich weg kann, das Häkchen **„Löschen“** und klicke dann oben auf **„… löschen“**.
 - Gelöscht heißt immer: in den Papierkorb. Unter **„Verlauf“** kannst du es rückgängig machen.
 - **„Behalten“** blendet die Datei aus, und TidyMac schlägt sie nicht mehr vor, solange sie unverändert bleibt.
-- Ab wann eine Datei als alt gilt und wie sicher sich Claude sein muss, stellst du unter Einstellungen › Umbenennen & Löschen ein.
+- Ab wann eine Datei als alt gilt, wann Installer vorgeschlagen werden und wie sicher sich Claude sein muss, stellst du unter Einstellungen › Umbenennen & Löschen ein.
 
 ## 7. Optional: Automatik, Autostart und Hintergrund-Modus
 

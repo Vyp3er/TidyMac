@@ -41,6 +41,12 @@ public enum FileNameTools {
         return re.firstMatch(in: base, range: NSRange(base.startIndex..., in: base)) != nil
     }
 
+    /// "Rechnung (1)" → "Rechnung", "Foto Kopie 2" → "Foto".
+    public static func removingCopySuffix(_ base: String) -> String {
+        guard let re = copySuffix else { return base }
+        return re.stringByReplacingMatches(in: base, range: NSRange(base.startIndex..., in: base), withTemplate: "")
+    }
+
     /// Makes a string safe as macOS file name: no "/" or ":", no control characters,
     /// no leading dots, collapsed whitespace, max. 150 characters.
     public static func sanitize(_ raw: String, maxLength: Int = 150) -> String {

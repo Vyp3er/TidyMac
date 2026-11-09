@@ -101,6 +101,21 @@ struct GeneralSettingsTab: View {
                     Button("Prüfen") { model.refreshFullDiskAccess() }
                 }
             }
+            Section("Downloads komplett nach „Dokumente“") {
+                Toggle("Downloads leeren: jede Datei in „Dokumente“ einsortieren", isOn: Binding(
+                    get: { model.settings.general.inboxToDocuments.contains("~/Downloads") },
+                    set: { on in
+                        if on {
+                            if !model.settings.general.inboxToDocuments.contains("~/Downloads") { model.settings.general.inboxToDocuments.append("~/Downloads") }
+                        } else {
+                            model.settings.general.inboxToDocuments.removeAll { $0 == "~/Downloads" }
+                        }
+                    }))
+                Text("Für jede Datei sucht TidyMac einen passenden Ordner unter dem Zielordner, z. B. Finanzen, Uni, Reisen, Bilder oder Unterlagen, und legt fehlende Überordner an. Installer, bereits entpackte Archive und Reste bleiben liegen und erscheinen unter „Löschen“. Du siehst alles vorher in der Vorschau.")
+                    .font(.caption).foregroundStyle(.secondary)
+                PathListEditor(title: "Ordner, die so geleert werden", items: $model.settings.general.inboxToDocuments, placeholder: "~/Desktop")
+                TextField("Zielordner", text: $model.settings.general.documentsRoot)
+            }
             Section("Ausgewählte Ordner (für „Ausgewählte Ordner aufräumen“)") {
                 PathListEditor(title: "Ordner", items: $model.settings.general.selectedFolders, placeholder: "~/Pfad")
             }
@@ -411,10 +426,19 @@ struct RenameCleanupSettingsTab: View {
                     Text("3 Jahren").tag(1095)
                     Text("5 Jahren").tag(1825)
                 }
+                Picker("In Downloads schon nach", selection: $model.settings.deletion.downloadsMinAgeDays) {
+                    Text("1 Monat").tag(30)
+                    Text("2 Monaten").tag(60)
+                    Text("3 Monaten").tag(90)
+                    Text("6 Monaten").tag(180)
+                    Text("1 Jahr").tag(365)
+                }
+                Stepper("Installer nicht erkannter Apps nach \(model.settings.deletion.installerAgeDays) Tagen vorschlagen",
+                        value: $model.settings.deletion.installerAgeDays, in: 0...90)
                 Slider(value: $model.settings.deletion.minConfidence, in: 0.5...0.95, step: 0.05) {
                     Text("Vorschlagen ab \(Int((model.settings.deletion.minConfidence * 100).rounded())) % Sicherheit")
                 }
-                Text("Gezählt wird ab dem letzten Öffnen, Ändern oder Ablegen. Claude sieht dabei nur Name, Ordner, Metadaten und kurze Textauszüge. Ohne KI werden nur eindeutige Fälle vorgeschlagen (alte Installer, Reste, entpackte Archive). Nichts ist vorausgewählt, und gelöscht wird immer in den Papierkorb.")
+                Text("Überflüssiges schlägt TidyMac unabhängig vom Alter vor: bereits entpackte Archive (bei ZIPs wird der Inhalt verglichen), Installer bereits installierter Apps, identische „(1)“-Kopien, Reste und abgebrochene Downloads. Bei alten Dateien zählt das letzte Öffnen, Ändern oder Ablegen, und Claude schätzt ein, ob du sie noch brauchst. Nichts ist vorausgewählt, gelöscht wird immer in den Papierkorb.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Text("Mit „Behalten“ gemerkt: \(model.keptCount) Datei\(model.keptCount == 1 ? "" : "en")")

@@ -13,7 +13,7 @@ struct DeletionView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Löschvorschläge").font(.headline)
-                    Text("Dateien, die du seit \(ageText) weder geöffnet noch geändert hast. Claude schätzt ein, ob du sie noch brauchst. Jede Datei bestätigst du einzeln; gelöscht heißt: in den Papierkorb, rückgängig im Verlauf.")
+                    Text("Überflüssiges wie entpackte Archive, Installer, doppelte Downloads und Reste, dazu Dateien, die du lange nicht benutzt hast (in Downloads seit \(downloadsAgeText), sonst seit \(ageText)); dort schätzt Claude ein, ob du sie noch brauchst. Jede Datei bestätigst du einzeln; gelöscht heißt Papierkorb, rückgängig im Verlauf.")
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3)
                     Picker("Bereich", selection: $model.scope) {
@@ -28,7 +28,7 @@ struct DeletionView: View {
                 Button {
                     model.findDeletionCandidates()
                 } label: {
-                    Label("Alte Dateien prüfen", systemImage: "sparkle.magnifyingglass")
+                    Label("Dateien prüfen", systemImage: "sparkle.magnifyingglass")
                 }
                 .disabled(model.isWorking)
                 Button(role: .destructive) {
@@ -55,11 +55,20 @@ struct DeletionView: View {
                               title: model.hasSearchedDeletion ? "Keine Löschvorschläge" : "Noch nicht geprüft",
                               text: model.hasSearchedDeletion
                                 ? "Unter den alten Dateien ist nichts, was sicher weg kann."
-                                : "„Alte Dateien prüfen“ sucht im gewählten Bereich. Projektordner, Fotoserien, Alben und geschützte Bereiche bleiben außen vor.")
+                                : "„Dateien prüfen“ sucht im gewählten Bereich. Projektordner, Fotoserien, Alben und geschützte Bereiche bleiben außen vor.")
                 } else {
                     List {
-                        ForEach(model.deletionSuggestions) { suggestion in
-                            DeletionRow(suggestion: suggestion)
+                        ForEach(DeletionSuggestion.Category.allCases, id: \.self) { category in
+                            let items = model.deletionSuggestions.filter { $0.category == category }
+                            if !items.isEmpty {
+                                Section {
+                                    ForEach(items) { suggestion in
+                                        DeletionRow(suggestion: suggestion)
+                                    }
+                                } header: {
+                                    Text("\(category.displayName) (\(items.count))").font(.subheadline.bold())
+                                }
+                            }
                         }
                     }
                     .listStyle(.inset)
@@ -81,10 +90,14 @@ struct DeletionView: View {
         }
     }
 
-    private var ageText: String {
-        let days = model.settings.deletion.minAgeDays
+    private var ageText: String { Self.text(days: model.settings.deletion.minAgeDays) }
+    private var downloadsAgeText: String {
+        Self.text(days: min(model.settings.deletion.downloadsMinAgeDays, model.settings.deletion.minAgeDays))
+    }
+
+    static func text(days: Int) -> String {
         if days % 365 == 0 { return days == 365 ? "über einem Jahr" : "über \(days / 365) Jahren" }
-        if days % 30 == 0 { return "über \(days / 30) Monaten" }
+        if days % 30 == 0 { return days == 30 ? "über einem Monat" : "über \(days / 30) Monaten" }
         return "über \(days) Tagen"
     }
 
@@ -186,7 +199,8 @@ struct DeletionFooter: View {
     }
 
     private var summary: String {
-        var parts = ["\(report.oldFiles) alte Datei\(report.oldFiles == 1 ? "" : "en") gefunden",
+        var parts = ["\(report.redundant) überflüssig",
+                     "\(report.oldFiles) alte Datei\(report.oldFiles == 1 ? "" : "en") geprüft",
                      "\(report.suggestions.count) Vorschl\(report.suggestions.count == 1 ? "ag" : "äge")"]
         if report.keptByAI > 0 { parts.append("\(report.keptByAI) behält Claude") }
         if report.unsureByAI > 0 { parts.append("\(report.unsureByAI) unklar (bleiben)") }

@@ -148,7 +148,20 @@ struct PreviewView: View {
                         .frame(maxHeight: 120)
                     }
                 }
-                ForEach(plan.notes.prefix(4), id: \.self) { note in
+                if !plan.disposable.isEmpty {
+                    HStack(spacing: 8) {
+                        Label("\(plan.disposable.count) überflüssige Datei\(plan.disposable.count == 1 ? "" : "en") in Downloads (Installer, entpackte Archive, Reste) \(plan.disposable.count == 1 ? "bleibt" : "bleiben") für „Löschen“ liegen.",
+                              systemImage: "trash")
+                            .font(.caption)
+                        Button("Zu „Löschen“") {
+                            model.selection = .deletion
+                            model.findDeletionCandidates()
+                        }
+                        .controlSize(.small)
+                        .disabled(model.isWorking)
+                    }
+                }
+                ForEach(plan.notes.filter { !$0.contains("für „Löschen“") }.prefix(4), id: \.self) { note in
                     Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 if !plan.aiStats.provider.isEmpty {

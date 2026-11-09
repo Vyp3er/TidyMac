@@ -117,6 +117,8 @@ public struct Plan: Sendable {
     public var actions: [PlannedAction]
     /// Files no rule or AI could place confidently.
     public var unsorted: [FileItem]
+    /// Inbox files that are not worth sorting (installers, leftovers, extracted archives) → "Löschen".
+    public var disposable: [FileItem] = []
     public var notes: [String]
     public var aiStats: AIStats
     public var createdAt: Date

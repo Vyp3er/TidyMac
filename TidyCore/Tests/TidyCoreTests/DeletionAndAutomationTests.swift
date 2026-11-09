@@ -33,6 +33,7 @@ final class DeletionTests: XCTestCase {
     func makeFixture() throws -> FakeHome {
         let fake = try FakeHome()
         fake.file("Downloads/Setup-Alt.dmg", String(repeating: "d", count: 4000))
+        fake.file("Documents/Bedienungsanleitung Drucker.pdf", String(repeating: "m", count: 3000))
         fake.file("Documents/Vertrag Wohnung.pdf", "Mietvertrag")
         fake.file("Documents/passwort-liste.txt", "geheim")
         fake.file("Downloads/neu.pdf", "frisch", modified: future.addingTimeInterval(-10 * 86_400))
@@ -50,11 +51,12 @@ final class DeletionTests: XCTestCase {
 
     func advisor(_ fake: FakeHome, provider: AIProvider?, cache: AICache? = nil,
                  settings: DeletionSettings = DeletionSettings()) -> DeletionAdvisor {
-        DeletionAdvisor(home: fake.home, settings: settings, aiSettings: AISettings(), provider: provider, cache: cache, now: future)
+        DeletionAdvisor(home: fake.home, settings: settings, aiSettings: AISettings(), provider: provider, cache: cache,
+                        now: future, installedApps: [])
     }
 
     static let mockAnswer: (DeletionFileDescriptor) -> DeletionVerdict? = { d in
-        if d.name.contains("Setup") { return DeletionVerdict(id: d.id, verdict: "delete", confidence: 0.9, reason: "Alter Installer") }
+        if d.name.contains("Bedienungsanleitung") { return DeletionVerdict(id: d.id, verdict: "delete", confidence: 0.9, reason: "Handbuch, jederzeit wieder ladbar") }
         if d.name.contains("Vertrag") { return DeletionVerdict(id: d.id, verdict: "keep", confidence: 0.95, reason: "Vertrag behalten") }
         return DeletionVerdict(id: d.id, verdict: "unsure", confidence: 0.5, reason: "?")
     }
@@ -62,7 +64,7 @@ final class DeletionTests: XCTestCase {
     func testOnlyOldFilesOutsideProjectsAndUnits() async throws {
         let fake = try makeFixture()
         let old = await advisor(fake, provider: nil).oldFiles(in: await scan(fake))
-        XCTAssertEqual(Set(old.map(\.name)), ["Setup-Alt.dmg", "Vertrag Wohnung.pdf", "passwort-liste.txt"],
+        XCTAssertEqual(Set(old.map(\.name)), ["Setup-Alt.dmg", "Bedienungsanleitung Drucker.pdf", "Vertrag Wohnung.pdf", "passwort-liste.txt"],
                        "recent files, project files and files inside cohesive folders are never candidates")
     }
 
@@ -71,13 +73,14 @@ final class DeletionTests: XCTestCase {
         let mock = MockDeletionProvider(answer: Self.mockAnswer)
         let report = await advisor(fake, provider: mock).analyze(scan: await scan(fake))
 
-        XCTAssertEqual(report.suggestions.map { $0.url.lastPathComponent }, ["Setup-Alt.dmg"])
-        XCTAssertEqual(report.suggestions.first?.source, .ai)
+        XCTAssertEqual(report.suggestions.map { $0.url.lastPathComponent }, ["Setup-Alt.dmg", "Bedienungsanleitung Drucker.pdf"])
+        XCTAssertEqual(report.suggestions.map(\.category), [.redundant, .old])
+        XCTAssertEqual(report.suggestions.map(\.source), [.rule, .ai])
         XCTAssertEqual(report.keptByAI, 1)
         XCTAssertEqual(report.notSent, 1, "privacy-excluded files are neither sent nor suggested")
         XCTAssertFalse(mock.sent.contains { $0.name.contains("passwort") })
+        XCTAssertFalse(mock.sent.contains { $0.name.contains("Setup") }, "redundant files need no AI")
         XCTAssertFalse(mock.sent.contains { $0.path.contains(fake.root.path) }, "no absolute paths (user name)")
-        XCTAssertEqual(mock.sent.first { $0.name.contains("Setup") }?.hint, "Installer/Disk-Image")
         XCTAssertGreaterThan(mock.sent.first?.daysUnused ?? 0, 365)
 
         XCTAssertTrue(report.suggestions.allSatisfy { !$0.isConfirmed }, "never pre-confirmed")
@@ -85,7 +88,7 @@ final class DeletionTests: XCTestCase {
         XCTAssertTrue(advisor.actions(for: report.suggestions).isEmpty, "unconfirmed suggestions do nothing")
 
         var confirmed = report.suggestions
-        confirmed[0].isConfirmed = true
+        confirmed[1].isConfirmed = true
         let actions = advisor.actions(for: confirmed)
         XCTAssertEqual(actions.map(\.kind), [.trash])
         XCTAssertEqual(actions.first?.origin, .deletion)
@@ -95,13 +98,14 @@ final class DeletionTests: XCTestCase {
                                 trash: FakeTrash(folder: fake.trash), openFiles: StaticOpenFilesProvider())
         let result = executor.execute(actions, title: "Löschen")
         XCTAssertEqual(result.done, 1)
-        XCTAssertFalse(fake.exists("Downloads/Setup-Alt.dmg"))
-        XCTAssertTrue(PathUtil.exists(fake.trash.appendingPathComponent("Setup-Alt.dmg")), "deleting means Trash")
+        XCTAssertFalse(fake.exists("Documents/Bedienungsanleitung Drucker.pdf"))
+        XCTAssertTrue(PathUtil.exists(fake.trash.appendingPathComponent("Bedienungsanleitung Drucker.pdf")), "deleting means Trash")
+        XCTAssertTrue(fake.exists("Downloads/Setup-Alt.dmg"), "not confirmed, not touched")
         XCTAssertTrue(fake.exists("Documents/Vertrag Wohnung.pdf"))
 
         let undo = executor.undoRun(result.runID)
         XCTAssertEqual(undo.restored, 1)
-        XCTAssertTrue(fake.exists("Downloads/Setup-Alt.dmg"))
+        XCTAssertTrue(fake.exists("Documents/Bedienungsanleitung Drucker.pdf"))
     }
 
     func testWithoutAIOnlyObviousCases() async throws {
@@ -109,6 +113,7 @@ final class DeletionTests: XCTestCase {
         let report = await advisor(fake, provider: nil).analyze(scan: await scan(fake))
         XCTAssertEqual(report.suggestions.map { $0.url.lastPathComponent }, ["Setup-Alt.dmg"])
         XCTAssertEqual(report.suggestions.first?.source, .rule)
+        XCTAssertEqual(report.suggestions.first?.category, .redundant)
         XCTAssertFalse(report.aiUsed)
     }
 
@@ -116,7 +121,7 @@ final class DeletionTests: XCTestCase {
         let fake = try makeFixture()
         let mock = MockDeletionProvider { d in DeletionVerdict(id: d.id, verdict: "delete", confidence: 0.4, reason: "vielleicht") }
         let report = await advisor(fake, provider: mock).analyze(scan: await scan(fake))
-        XCTAssertTrue(report.suggestions.isEmpty)
+        XCTAssertTrue(report.suggestions.allSatisfy { $0.category == .redundant }, "Claude's unsure verdicts are not suggested")
         XCTAssertEqual(report.unsureByAI, 2)
     }
 
@@ -132,10 +137,10 @@ final class DeletionTests: XCTestCase {
         XCTAssertEqual(second.aiStats.cacheHits, 2)
         XCTAssertEqual(second.suggestions.map(\.url), first.suggestions.map(\.url))
 
-        cache.markKept(try XCTUnwrap(first.suggestions.first).keepKey)
+        for suggestion in first.suggestions { cache.markKept(suggestion.keepKey) }
         let third = await advisor(fake, provider: mock, cache: cache).analyze(scan: await scan(fake))
-        XCTAssertTrue(third.suggestions.isEmpty, "a file the user kept is not suggested again")
-        XCTAssertEqual(third.keptByUser, 1)
+        XCTAssertTrue(third.suggestions.isEmpty, "files the user kept are not suggested again")
+        XCTAssertEqual(third.keptByUser, 2)
     }
 
     func testAIErrorFallsBackToRules() async throws {
@@ -268,25 +273,25 @@ final class AutomationTests: XCTestCase {
         var sorter = makeSorter(fake, journal: journal)
         sorter.minimumAge = 0
         let outcome = await sorter.run(folders: [fake.url("Downloads"), fake.url("Desktop"), fake.url("GibtEsNicht")])
-        XCTAssertEqual(Set(outcome.moved.map { $0.source.lastPathComponent }), ["Setup.dmg", "Rechnung Telekom.pdf"])
-        XCTAssertTrue(fake.exists("Downloads/Installer/Setup.dmg"))
+        XCTAssertEqual(Set(outcome.moved.map { $0.source.lastPathComponent }), ["Rechnung Telekom.pdf"])
+        XCTAssertTrue(fake.exists("Downloads/Setup.dmg"), "installers wait for „Löschen“")
         XCTAssertFalse(fake.exists("Desktop/Rechnung Telekom.pdf"))
         XCTAssertTrue(outcome.moved.contains { $0.destinationFolder?.path.contains("Finanzen/Rechnungen") == true })
-        XCTAssertTrue(fake.exists("Downloads/bild.png"), "uncertain files stay")
-        XCTAssertEqual(journal.reviewItems().map { URL(fileURLWithPath: $0.path).lastPathComponent }, ["bild.png"])
+        XCTAssertTrue(fake.exists("Downloads/bild.png"), "below the automatic threshold: stays")
+        XCTAssertEqual(Set(journal.reviewItems().map { URL(fileURLWithPath: $0.path).lastPathComponent }), ["bild.png", "zufall.xyz"],
+                       "Downloads files get a Documents suggestion for review")
         XCTAssertTrue(fake.exists("Downloads/zufall.xyz"))
-        XCTAssertEqual(outcome.leftAlone, 1)
+        XCTAssertEqual(outcome.leftAlone, 0)
         XCTAssertTrue(fake.exists("Documents/Code/app/main.swift"))
         XCTAssertEqual(journal.runs(limit: 5).first?.source, "schedule")
 
         // A second run the same day finds nothing new; the review list does not grow.
         _ = await sorter.run(folders: [fake.url("Downloads"), fake.url("Desktop")])
-        XCTAssertEqual(journal.reviewItems().count, 1)
+        XCTAssertEqual(journal.reviewItems().count, 2)
 
         let undo = Executor(home: fake.home, policy: fake.policy(), journal: journal,
                             trash: FakeTrash(folder: fake.trash), openFiles: StaticOpenFilesProvider()).undoRun(try XCTUnwrap(outcome.runID))
-        XCTAssertEqual(undo.restored, 2)
-        XCTAssertTrue(fake.exists("Downloads/Setup.dmg"))
+        XCTAssertEqual(undo.restored, 1)
         XCTAssertTrue(fake.exists("Desktop/Rechnung Telekom.pdf"))
     }
 }

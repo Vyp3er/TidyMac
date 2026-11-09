@@ -189,10 +189,11 @@ final class ExecutionTests: XCTestCase {
         let plan = await planner.plan(scan: await scanner.scan(.everything))
         let executor = try makeExecutor(fake)
         let r = executor.execute(plan.actions, title: "Alles")
-        XCTAssertEqual(r.done, 3, r.messages.joined(separator: "\n"))
+        XCTAssertEqual(r.done, 2, r.messages.joined(separator: "\n"))
         XCTAssertEqual(projectSnapshot(), projectsBefore, "project folders must be untouched")
         XCTAssertTrue(fake.exists("Documents/Finanzen/Rechnungen"))
-        XCTAssertTrue(fake.exists("Downloads/Installer/Installer.pkg"))
+        XCTAssertTrue(fake.exists("Downloads/Installer.pkg"), "installers are not sorted but offered under „Löschen“")
+        XCTAssertEqual(plan.disposable.map(\.name), ["Installer.pkg"])
         _ = executor.undoRun(r.runID)
         XCTAssertTrue(fake.exists("Downloads/Rechnung_Vodafone.pdf"))
         XCTAssertFalse(fake.exists("Documents/Finanzen"))
@@ -299,20 +300,23 @@ final class BackgroundTests: XCTestCase {
             })
         let start = Date()
         fake.file("Downloads/Setup.dmg")
+        fake.file("Downloads/Rechnung Strom.pdf")
         fake.file("Downloads/bild.png")
         fake.file("Downloads/laeuft.crdownload")
         fake.file("Downloads/Unterordner/x.txt")
-        organizer.note(paths: [fake.url("Downloads/Setup.dmg").path, fake.url("Downloads/bild.png").path,
-                               fake.url("Downloads/laeuft.crdownload").path, fake.url("Downloads/Unterordner/x.txt").path], now: start)
+        organizer.note(paths: [fake.url("Downloads/Setup.dmg").path, fake.url("Downloads/Rechnung Strom.pdf").path,
+                               fake.url("Downloads/bild.png").path, fake.url("Downloads/laeuft.crdownload").path,
+                               fake.url("Downloads/Unterordner/x.txt").path], now: start)
         let early = await organizer.tick(now: start.addingTimeInterval(5))
         XCTAssertNil(early, "nothing happens before the settle time")
-        XCTAssertTrue(fake.exists("Downloads/Setup.dmg"))
+        XCTAssertTrue(fake.exists("Downloads/Rechnung Strom.pdf"))
 
         let maybeOutcome = await organizer.tick(now: start.addingTimeInterval(40))
         let outcome = try XCTUnwrap(maybeOutcome)
-        XCTAssertEqual(outcome.moved.map { $0.source.lastPathComponent }, ["Setup.dmg"])
-        XCTAssertTrue(fake.exists("Downloads/Installer/Setup.dmg"))
-        XCTAssertTrue(fake.exists("Downloads/bild.png"), "low confidence stays and goes to review")
+        XCTAssertEqual(outcome.moved.map { $0.source.lastPathComponent }, ["Rechnung Strom.pdf"])
+        XCTAssertFalse(fake.exists("Downloads/Rechnung Strom.pdf"))
+        XCTAssertTrue(fake.exists("Downloads/Setup.dmg"), "installers wait for „Löschen“")
+        XCTAssertTrue(fake.exists("Downloads/bild.png"), "below the automatic threshold: stays and goes to review")
         XCTAssertEqual(journal.reviewItems().map { URL(fileURLWithPath: $0.path).lastPathComponent }, ["bild.png"])
         XCTAssertTrue(fake.exists("Downloads/laeuft.crdownload"))
         XCTAssertTrue(fake.exists("Downloads/Unterordner/x.txt"))
@@ -322,6 +326,6 @@ final class BackgroundTests: XCTestCase {
         let undo = Executor(home: home, policy: ProtectionPolicy(home: home, settings: ProtectionSettings()), journal: journal,
                             trash: FakeTrash(folder: fake.trash), openFiles: StaticOpenFilesProvider()).undoRun(runID)
         XCTAssertEqual(undo.restored, 1)
-        XCTAssertTrue(fake.exists("Downloads/Setup.dmg"))
+        XCTAssertTrue(fake.exists("Downloads/Rechnung Strom.pdf"))
     }
 }

@@ -54,6 +54,17 @@ enum DebugOptions {
         }
     }
 
+    static func describe(_ a: PlannedAction, home: HomeContext) -> String {
+        let mark = a.isSelected ? "[x]" : "[ ]"
+        let percent = Int(a.confidence * 100)
+        let source = home.abbreviate(a.source)
+        let folder = a.destinationFolder.map { home.abbreviate($0) } ?? "-"
+        var line = "\(mark) \(percent)% \(a.kind.rawValue) \(source) → \(folder)/\(a.finalName)"
+        line += " | \(a.origin.displayName) | \(a.reason)"
+        if !a.warnings.isEmpty { line += " ⚠︎ " + a.warnings.joined(separator: "; ") }
+        return line
+    }
+
     /// Writes the window's view tree with frames (to diagnose blank snapshots).
     @MainActor
     static func dumpViews(_ name: String) {
@@ -104,6 +115,16 @@ enum DebugOptions {
             while model.isWorking { try? await Task.sleep(nanoseconds: 300_000_000) }
             try? await Task.sleep(nanoseconds: 800_000_000)
             snapshot("02-preview")
+            let planLines = model.actions.map { describe($0, home: model.home) }
+            let disposable: [String] = model.plan?.disposable.map(\.name) ?? []
+            let unsorted: [String] = model.plan?.unsorted.map(\.name) ?? []
+            let notes: [String] = model.plan?.notes ?? []
+            var planDump: [String] = planLines
+            planDump.append("disposable: " + disposable.joined(separator: ", "))
+            planDump.append("unsorted: " + unsorted.joined(separator: ", "))
+            planDump.append("notes: " + notes.joined(separator: " | "))
+            let planFile = (snapshotDirectory ?? URL(fileURLWithPath: "/tmp")).appendingPathComponent("plan.txt")
+            try? planDump.joined(separator: "\n").write(to: planFile, atomically: true, encoding: .utf8)
             if ProcessInfo.processInfo.environment["TIDYMAC_TOUR_EXECUTE"] == "1" {
                 // Only moves/renames (no Trash) so a test run never touches the real Trash.
                 for i in model.actions.indices where model.actions[i].kind == .trash || model.actions[i].kind == .archive {

@@ -76,6 +76,13 @@ final class RuleEngineTests: XCTestCase {
 }
 
 final class PlannerTests: XCTestCase {
+    /// The general sorting mechanics without "Downloads → Documents".
+    static var legacy: GeneralSettings {
+        var g = GeneralSettings()
+        g.inboxToDocuments = []
+        return g
+    }
+
     func makePlanner(_ fake: FakeHome, provider: AIProvider?, general: GeneralSettings = GeneralSettings(),
                      ai: AISettings = AISettings(), rules: RuleSettings = RuleSettings()) -> (FileScanner, Planner) {
         let policy = fake.policy()
@@ -92,7 +99,7 @@ final class PlannerTests: XCTestCase {
         fake.file("Downloads/Rechnung_Strom.pdf")
         fake.file("Downloads/App.dmg")
         fake.file("Downloads/Notizen.docx")
-        let (scanner, planner) = makePlanner(fake, provider: nil)
+        let (scanner, planner) = makePlanner(fake, provider: nil, general: Self.legacy)
         let before = fake.snapshot()
         let plan = await planner.plan(scan: await scanner.scan(.folders([fake.url("Downloads")])))
         XCTAssertEqual(before, fake.snapshot(), "planning must not change anything")
@@ -103,6 +110,16 @@ final class PlannerTests: XCTestCase {
         XCTAssertNil(byName["Notizen.docx"])
         XCTAssertTrue(plan.unsorted.contains { $0.name == "Notizen.docx" })
         XCTAssertFalse(plan.newFolders().isEmpty)
+
+        // Default: Downloads is emptied into Documents; the installer stays for "Löschen".
+        let (scanner2, planner2) = makePlanner(fake, provider: nil)
+        let plan2 = await planner2.plan(scan: await scanner2.scan(.folders([fake.url("Downloads")])))
+        XCTAssertEqual(before, fake.snapshot())
+        let byName2 = Dictionary(uniqueKeysWithValues: plan2.actions.map { ($0.source.lastPathComponent, $0) })
+        XCTAssertNil(byName2["App.dmg"])
+        XCTAssertEqual(plan2.disposable.map(\.name), ["App.dmg"])
+        XCTAssertEqual(byName2["Notizen.docx"].map { fake.home.abbreviate($0.destinationFolder ?? fake.home.home) }, "~/Documents/Unterlagen")
+        XCTAssertTrue(plan2.unsorted.isEmpty)
     }
 
     func testAIOnlyGetsUnclearFilesAndNoFullContent() async throws {
@@ -143,7 +160,7 @@ final class PlannerTests: XCTestCase {
             default: return AISuggestion(id: d.id, targetFolder: "~/Documents/Code/app/docs", description: "", confidence: 0.95, reason: "Projekt")
             }
         }
-        let (scanner, planner) = makePlanner(fake, provider: mock)
+        let (scanner, planner) = makePlanner(fake, provider: mock, general: Self.legacy)
         let plan = await planner.plan(scan: await scanner.scan(.folders([fake.url("Downloads")])))
         let a = plan.actions.first { $0.source.lastPathComponent == "a.docx" }
         XCTAssertEqual(a?.isSelected, false, "low confidence must be deselected")
@@ -160,7 +177,7 @@ final class PlannerTests: XCTestCase {
             let folder = d.name == "rezept.docx" ? "~/Documents/Kochen/Rezepte" : "~/Documents/Briefe"
             return AISuggestion(id: d.id, targetFolder: folder, description: "", confidence: 0.9, reason: "")
         }
-        let (scanner, planner) = makePlanner(fake, provider: mock)
+        let (scanner, planner) = makePlanner(fake, provider: mock, general: Self.legacy)
         let plan = await planner.plan(scan: await scanner.scan(.folders([fake.url("Downloads")])))
         let rezept = plan.actions.first { $0.source.lastPathComponent == "rezept.docx" }
         XCTAssertEqual(rezept.map { fake.home.abbreviate($0.destinationFolder ?? fake.home.home) }, "~/Documents")
@@ -186,7 +203,7 @@ final class PlannerTests: XCTestCase {
         fake.file("Downloads/bild.png")
         let mock = MockAIProvider { _ in nil }
         mock.error = .quotaExhausted("limit")
-        let (scanner, planner) = makePlanner(fake, provider: mock)
+        let (scanner, planner) = makePlanner(fake, provider: mock, general: Self.legacy)
         let plan = await planner.plan(scan: await scanner.scan(.folders([fake.url("Downloads")])))
         let bild = plan.actions.first { $0.source.lastPathComponent == "bild.png" }
         XCTAssertEqual(bild.map { fake.home.abbreviate($0.destinationFolder ?? fake.home.home) }, "~/Pictures/Bilder")
@@ -198,7 +215,7 @@ final class PlannerTests: XCTestCase {
         fake.file("Desktop/Setup.dmg")
         fake.file("Downloads/Setup.dmg")
         fake.file("Downloads/Installer/Setup.dmg")
-        let (scanner, planner) = makePlanner(fake, provider: nil)
+        let (scanner, planner) = makePlanner(fake, provider: nil, general: Self.legacy)
         let plan = await planner.plan(scan: await scanner.scan(.folders([fake.url("Downloads"), fake.url("Desktop")])))
         let names = plan.actions.map(\.finalName).sorted()
         XCTAssertEqual(names, ["Setup 2.dmg", "Setup 3.dmg"])

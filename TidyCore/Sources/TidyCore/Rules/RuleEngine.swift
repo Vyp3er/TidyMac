@@ -125,6 +125,11 @@ public struct DestinationResolver: Sendable {
         ["3D-Modelle", "3D", "3D Models", "3D-Druck"],
         ["Code-Schnipsel", "Snippets", "Code"],
         ["Audio", "Audiodateien", "Sounds"],
+        ["Videos", "Filme", "Movies", "Video"],
+        ["Unterlagen", "Dokumente", "PDFs"],
+        ["Tabellen", "Spreadsheets", "Excel"],
+        ["Präsentationen", "Praesentationen", "Presentations", "Folien", "Slides"],
+        ["Sonstiges", "Diverses", "Misc", "Other", "Andere"],
     ]
 
     public init(home: HomeContext, screenshotLocation: URL? = nil) {
