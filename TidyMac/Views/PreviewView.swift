@@ -52,6 +52,7 @@ struct PreviewView: View {
                     Button("Nur sichere (≥ 85 %)") {
                         for i in model.actions.indices {
                             model.actions[i].isSelected = model.actions[i].confidence >= 0.85 && model.actions[i].warnings.isEmpty
+                                && model.actions[i].kind != .trash
                         }
                     }
                 }
@@ -150,7 +151,7 @@ struct PreviewView: View {
                 }
                 if !plan.disposable.isEmpty {
                     HStack(spacing: 8) {
-                        Label("\(plan.disposable.count) überflüssige Datei\(plan.disposable.count == 1 ? "" : "en") in Downloads (Installer, entpackte Archive, Reste) \(plan.disposable.count == 1 ? "bleibt" : "bleiben") für „Löschen“ liegen.",
+                        Label("\(plan.disposable.count) überflüssige Datei\(plan.disposable.count == 1 ? "" : "en") (Installer, entpackte Archive, Reste) \(plan.disposable.count == 1 ? "steht" : "stehen") in der Liste als „Papierkorb“ – jede nur mit eigenem Häkchen.",
                               systemImage: "trash")
                             .font(.caption)
                         Button("Zu „Löschen“") {
@@ -161,7 +162,7 @@ struct PreviewView: View {
                         .disabled(model.isWorking)
                     }
                 }
-                ForEach(plan.notes.filter { !$0.contains("für „Löschen“") }.prefix(4), id: \.self) { note in
+                ForEach(plan.notes.filter { !$0.contains("„In den Papierkorb“") }.prefix(5), id: \.self) { note in
                     Label(note, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 if !plan.aiStats.provider.isEmpty {
@@ -247,6 +248,9 @@ struct ActionRow: View {
                 if action.kind == .move || action.kind == .rename || action.kind == .moveFolder {
                     Button("Ziel ändern …", action: chooseDestination)
                 }
+                if action.kind == .trash && !PathUtil.isDirectory(action.source) {
+                    Button("Doch behalten und verschieben …", action: chooseDestination)
+                }
                 if action.kind != .trash && action.kind != .archive && action.kind != .moveFolder {
                     Button(action.isRename ? "Namen bearbeiten" : "Umbenennen …") {
                         nameDraft = action.finalName
@@ -306,6 +310,7 @@ struct ActionRow: View {
             return
         }
         action.destinationFolder = url
+        if action.kind == .trash { action.kind = .move; action.origin = .manual }
         if action.kind == .rename && !PathUtil.isSame(url, action.source.deletingLastPathComponent()) { action.kind = .move }
         action.group = model.home.abbreviate(url)
         action.origin = .manual

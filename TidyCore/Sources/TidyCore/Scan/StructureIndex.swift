@@ -20,7 +20,7 @@ public struct StructureIndex: Sendable {
         while index < queue.count && result.count < limit {
             let (dir, depth) = queue[index]
             index += 1
-            if policy.ancestorProtection(of: dir, includeSelf: true) != nil && depth == 0 { continue }
+            if policy.destinationProtection(for: dir) != nil && depth == 0 { continue }
             result.append(dir)
             guard depth < maxDepth else { continue }
             let children = (try? FileManager.default.contentsOfDirectory(
@@ -33,7 +33,7 @@ public struct StructureIndex: Sendable {
                 let grandChildren = (try? FileManager.default.contentsOfDirectory(
                     at: child, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey], options: [])) ?? []
                 let names = grandChildren.map(\.lastPathComponent)
-                guard case .normal = policy.directoryClass(child, entries: names) else { continue }
+                guard case .normal = policy.destinationDirectoryClass(child, entries: names) else { continue }
                 let infos = grandChildren.map { url -> EntryInfo in
                     let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
                     return EntryInfo(name: url.lastPathComponent, isDirectory: v?.isDirectory == true && v?.isPackage != true)

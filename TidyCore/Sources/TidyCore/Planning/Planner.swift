@@ -29,6 +29,9 @@ public final class Planner: @unchecked Sendable {
     /// Inboxes that are emptied into `documentsRoot` (e.g. Downloads → Documents).
     public let documentsInboxes: [URL]
     public let documentsRoot: URL
+    /// Normalized names of installed apps (nil = read from /Applications when needed).
+    public var installedApps: Set<String>?
+    static let trashGroup = "Überflüssig – in den Papierkorb (einzeln bestätigen)"
 
     public init(home: HomeContext, policy: ProtectionPolicy, engine: RuleEngine, structure: StructureIndex,
                 provider: AIProvider?, cache: AICache?, general: GeneralSettings, aiSettings: AISettings) {
@@ -126,6 +129,7 @@ public final class Planner: @unchecked Sendable {
 
         var decisions: [Decision] = []
         var aiJobs: [AIJob] = []
+        var trashActions: [PlannedAction] = []
         let aiActive = provider != nil
 
         for item in candidates {
@@ -144,9 +148,14 @@ public final class Planner: @unchecked Sendable {
             }
 
             let mustMove = isDocumentsInbox(item.parent)
-            if mustMove, RedundancyDetector.quickReason(for: item) != nil {
-                // Installers, leftovers, extracted archives: not worth a place in Documents → "Löschen".
+            if mustMove, let quick = RedundancyDetector.quickReason(for: item) {
+                // Installers, leftovers, extracted archives: not worth a place in Documents. Offered for
+                // the Trash, but each one has to be ticked on its own.
                 plan.disposable.append(item)
+                trashActions.append(PlannedAction(kind: .trash, source: item.url, destinationFolder: nil,
+                                                  reason: "\(quick) – überflüssig, kommt nur nach deinem Häkchen in den Papierkorb",
+                                                  confidence: 0.9, origin: .deletion, group: Self.trashGroup, isSelected: false,
+                                                  sizeBytes: item.size))
                 continue
             }
             var match = engine.match(item, now: now())
@@ -218,12 +227,27 @@ public final class Planner: @unchecked Sendable {
                 actions.append(action)
             }
         }
+        if mode == .sortAndRename {
+            let (extra, extraTrash, stays) = inboxLeftovers(scan)
+            actions += extra
+            trashActions += extraTrash
+            if !stays.isEmpty {
+                plan.notes.append("Bleibt in Downloads (Schutz): " + stays.prefix(10).joined(separator: ", ")
+                                  + (stays.count > 10 ? " und \(stays.count - 10) weitere" : ""))
+            }
+        }
         actions = enforceNewFolderRules(actions)
         actions = markIdenticalTargets(actions)
         actions = resolveNameConflicts(actions)
         for i in actions.indices {
-            actions[i].isSelected = actions[i].confidence >= general.selectThreshold && actions[i].warnings.isEmpty
+            // Downloads is emptied: every move out of it is pre-selected (the confidence is about the folder,
+            // not about whether to move). Warnings (projects, duplicates) still need a look.
+            let leavesInbox = isDocumentsInbox(actions[i].source.deletingLastPathComponent())
+                && (actions[i].kind == .move || actions[i].kind == .moveFolder)
+            actions[i].isSelected = actions[i].warnings.isEmpty
+                && (leavesInbox || actions[i].confidence >= general.selectThreshold)
         }
+        actions += trashActions
         plan.actions = actions.sorted { ($0.group, $0.source.lastPathComponent) < ($1.group, $1.source.lastPathComponent) }
         // Everything without an action is reported as "not assigned".
         let handled = Set(actions.map { PathUtil.path($0.source) }).union(plan.disposable.map { PathUtil.path($0.url) })
@@ -232,9 +256,50 @@ public final class Planner: @unchecked Sendable {
         plan.unsorted = plan.unsorted.filter { !handled.contains(PathUtil.path($0.url)) }
         if !plan.disposable.isEmpty {
             let n = plan.disposable.count
-            plan.notes.append("\(n) Datei\(n == 1 ? "" : "en") in Downloads \(n == 1 ? "ist" : "sind") überflüssig (Installer, entpackte Archive, Reste) und \(n == 1 ? "bleibt" : "bleiben") für „Löschen“ liegen.")
+            plan.notes.append("\(n) überflüssige Datei\(n == 1 ? "" : "en") in Downloads (Installer, entpackte Archive, Reste) \(n == 1 ? "steht" : "stehen") als „In den Papierkorb“ in der Liste – nur mit einzelnem Häkchen.")
         }
         return plan
+    }
+
+    /// Inbox items the scanner protects: saved web pages move as a pair, downloaded copies of
+    /// installed apps and stale aborted downloads are offered for the Trash, the rest stays (listed).
+    func inboxLeftovers(_ scan: ScanResult) -> ([PlannedAction], [PlannedAction], [String]) {
+        var moves: [PlannedAction] = []
+        var trash: [PlannedAction] = []
+        var stays: [String] = []
+        let apps = installedApps ?? RedundancyDetector.installedAppNames(home: home)
+        for entry in scan.protected where isDocumentsInbox(entry.url.deletingLastPathComponent()) {
+            let name = entry.url.lastPathComponent
+            switch entry.reason {
+            case .savedWebPage:
+                let target = engine.resolver.resolve(documentsRoot.appendingPathComponent("Websites", isDirectory: true))
+                moves.append(PlannedAction(kind: entry.isDirectory ? .moveFolder : .move, source: entry.url, destinationFolder: target,
+                                           reason: "Gespeicherte Webseite – Seite und Ordner ziehen zusammen um", confidence: 0.85,
+                                           origin: .builtInRule("Kategorie Websites"), group: group(for: .move, folder: target)))
+            case let .bundle(ext) where ext.lowercased() == "app":
+                let app = RedundancyDetector.normalize(String(name.dropLast(4)))
+                if apps.contains(app) {
+                    trash.append(PlannedAction(kind: .trash, source: entry.url, destinationFolder: nil,
+                                               reason: "App ist bereits in „Programme“ installiert – die Kopie in Downloads ist überflüssig",
+                                               confidence: 0.9, origin: .deletion, group: Self.trashGroup, isSelected: false))
+                } else {
+                    stays.append("\(name) (App – selbst nach „Programme“ ziehen)")
+                }
+            case .incompleteDownload:
+                if let modified = entry.modified, now().timeIntervalSince(modified) > 2 * 86_400 {
+                    trash.append(PlannedAction(kind: .trash, source: entry.url, destinationFolder: nil,
+                                               reason: "Abgebrochener Download – kommt nur nach deinem Häkchen in den Papierkorb",
+                                               confidence: 0.9, origin: .deletion, group: Self.trashGroup, isSelected: false))
+                } else {
+                    stays.append("\(name) (Download läuft noch)")
+                }
+            case .hidden:
+                break
+            default:
+                stays.append("\(name) (\(entry.reason.description))")
+            }
+        }
+        return (moves, trash, stays)
     }
 
     // MARK: Rules
@@ -509,6 +574,15 @@ public final class Planner: @unchecked Sendable {
 
         var folder = d.folder.map { engine.resolver.resolve($0) }
         if let f = folder, PathUtil.isSame(f, item.parent) { folder = nil }
+        if let f = folder, let problem = policy.destinationProtection(for: f), isDocumentsInbox(item.parent) {
+            // Downloads must be emptied: if the chosen folder is not allowed, the category by type is used.
+            let category = documentsCategory(for: item).destinationFolder
+            if !PathUtil.isSame(category, f), policy.destinationProtection(for: category) == nil {
+                folder = category
+                reason += " – „\(home.abbreviate(f))“ ist geschützt (\(problem.description)), daher Kategorie"
+                confidence = min(confidence, 0.7)
+            }
+        }
         if let f = folder {
             if let problem = policy.destinationProtection(for: f) {
                 reason += " – Ziel nicht erlaubt (\(problem.description))"
@@ -542,6 +616,7 @@ public final class Planner: @unchecked Sendable {
         if PathUtil.isDescendant(target, of: folder.url) { return nil }
         if policy.destinationProtection(for: target) != nil { return nil }
         var warnings: [String] = []
+        if let w = folder.warning { warnings.append(w) }
         if let ref = policy.referenceWarning(for: folder.url) { warnings.append(ref) }
         if folder.kind == .project { warnings.append("Projektordner – wird nur als Ganzes verschoben") }
         return PlannedAction(kind: .moveFolder, source: folder.url, destinationFolder: target, newName: nil,

@@ -8,7 +8,7 @@ TidyMac gehört zu [MacTweaks](https://github.com/Vyp3er/MacTweaks), zusammen mi
 
 - Swift 5 + SwiftUI (AppKit wo nötig), macOS 15 oder neuer, Apple Silicon
 - Kein App Sandbox
-- Kernlogik als Swift Package `TidyCore` mit 82 Unit-Tests; App-Target `TidyMac` im Xcode-Projekt
+- Kernlogik als Swift Package `TidyCore` mit 83 Unit-Tests; App-Target `TidyMac` im Xcode-Projekt
 
 ## Projektstruktur
 
@@ -123,7 +123,7 @@ Die Schutzlogik (`TidyCore/Protection`) wird beim Scan, beim Planen **und** unmi
 
 ## Sortierlogik (Hybrid)
 
-**Downloads komplett nach „Dokumente“ (Standard):** Downloads ist ein Eingangsordner, der leer werden soll. Jede Datei daraus bekommt einen Platz unter `~/Documents`, auch Bilder, Videos und Musik. Fehlende Überordner legt TidyMac an. Claude wählt thematische Ordner wie `Finanzen/Rechnungen/2025`, `Uni/Analysis`, `Wohnung`, `Bewerbungen` oder `Reisen` und bevorzugt vorhandene Ordner. Einen neuen Überordner darf es auch für eine einzelne Datei anlegen, tiefere neue Ebenen erst, wenn mehrere Dateien hineinpassen. Kann Claude nichts zuordnen (oder ist die KI aus), greift eine Kategorie nach Dateiart: `Unterlagen`, `Bilder` (mit `Bildschirmfotos/<Jahr>` und `Fotos/<Jahr>`), `Videos`, `Audio`, `Tabellen`, `Präsentationen`, `Bücher`, `Archive`, `Code`, `Sonstiges`. Ordner aus Downloads wandern als Ganzes mit (Fotoserien → `Bilder`, Alben → `Audio/Alben`). Installer, bereits entpackte Archive, Torrent-Dateien und Reste werden nicht einsortiert, sondern unter „Löschen“ vorgeschlagen. Projektordner bleiben wie immer unangetastet. Einstellbar unter Einstellungen › Allgemein (auch für weitere Ordner wie den Schreibtisch und mit anderem Zielordner).
+**Downloads komplett nach „Dokumente“ (Standard):** Downloads ist ein Eingangsordner, der leer werden soll. Jede Datei daraus bekommt einen Platz unter `~/Documents`, auch Bilder, Videos und Musik. Fehlende Überordner legt TidyMac an. Claude wählt thematische Ordner wie `Finanzen/Rechnungen/2025`, `Uni/Analysis`, `Wohnung`, `Bewerbungen` oder `Reisen` und bevorzugt vorhandene Ordner. Einen neuen Überordner darf es auch für eine einzelne Datei anlegen, tiefere neue Ebenen erst, wenn mehrere Dateien hineinpassen. Kann Claude nichts zuordnen (oder ist die KI aus), greift eine Kategorie nach Dateiart: `Unterlagen`, `Bilder` (mit `Bildschirmfotos/<Jahr>` und `Fotos/<Jahr>`), `Videos`, `Audio`, `Tabellen`, `Präsentationen`, `Bücher`, `Archive`, `Code`, `Sonstiges`. Ordner aus Downloads wandern als Ganzes mit (Fotoserien → `Bilder`, Alben → `Audio/Alben`), gespeicherte Webseiten zusammen mit ihrem `_files`-Ordner nach `Websites`. Jede Verschiebung aus Downloads ist vorausgewählt. Abgewählt bleiben nur Fälle mit Warnung: Projektordner (Git, Node, Python …) und Ordner, die einen Projektordner enthalten, werden nur als Ganzes nach `Dokumente/Projekte` angeboten, ihr Inhalt wird nie angefasst. Dazu kommen Dateien, die im Ziel schon identisch liegen. Installer, bereits entpackte Archive, Torrent-Dateien, Reste, abgebrochene Downloads und Kopien bereits installierter Apps stehen in derselben Vorschau als „In den Papierkorb“, die jeweils nur mit eigenem Häkchen ausgeführt werden („Alle auswählen“ kreuzt sie nie an). Liegt „Dokumente“ in iCloud („Schreibtisch & Dokumente“), ist es als Ziel trotzdem erlaubt; als Quelle bleibt der Cloud-Ordner geschützt. Einstellbar unter Einstellungen › Allgemein (auch für weitere Ordner wie den Schreibtisch und mit anderem Zielordner).
 
 Für alle anderen Ordner gilt:
 
@@ -198,7 +198,8 @@ cd TidyCore && swift build
 
 - Verschieben über Volume-Grenzen hinweg wird nicht unterstützt (bewusst: Atomisches `renamex_np(RENAME_EXCL)` statt Kopieren+Löschen).
 - „Gerade geöffnet“ erkennt Dateien, die ein Prozess offen hält. Apps, die Dateien nur kurz lesen (z. B. Vorschau), halten sie nicht offen.
-- Ist „Schreibtisch & Dokumente“ in iCloud aktiv, sind diese Ordner ohne Freigabe geschützt. Dann bleibt ohne Freigabe wenig zu sortieren.
+- Ist „Schreibtisch & Dokumente“ in iCloud aktiv, werden Schreibtisch und Dokumente ohne Freigabe nicht selbst umsortiert. Als Ziel für Downloads ist „Dokumente“ aber erlaubt.
+- Apps (`.app`) in Downloads, die nicht schon installiert sind, verschiebt TidyMac nicht; ziehe sie selbst nach „Programme“.
 - Bilder werden von der KI nicht inhaltlich erkannt (nur Name/Metadaten).
 - Die Bildschirm-Aufnahmen der Debug-Tour zeichnen die transparente Seitenleiste nicht mit; in der laufenden App ist sie normal sichtbar.
 

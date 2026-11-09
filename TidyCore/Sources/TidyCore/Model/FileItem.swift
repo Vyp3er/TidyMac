@@ -232,9 +232,12 @@ public struct FolderItem: Sendable, Hashable, Identifiable, Codable {
     public var sampleNames: [String]
     /// Set when the folder may never move (e.g. it contains a project).
     public var blockedReason: String?
+    /// Movable, but only after a look (e.g. contains a project): never pre-selected.
+    public var warning: String?
 
     public init(url: URL, kind: FolderKind, size: Int64 = 0, fileCount: Int = 0, modified: Date? = nil,
-                sampleNames: [String] = [], blockedReason: String? = nil) {
+                sampleNames: [String] = [], blockedReason: String? = nil, warning: String? = nil) {
+        self.warning = warning
         self.url = url
         self.kind = kind
         self.size = size

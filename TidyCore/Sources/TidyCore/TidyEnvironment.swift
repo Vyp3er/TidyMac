@@ -25,8 +25,11 @@ public struct TidyEnvironment: Sendable {
     public var cacheURL: URL { supportDirectory.appendingPathComponent("ai-cache.sqlite") }
 
     public func makePolicy(extraRoots: [URL] = []) -> ProtectionPolicy {
-        ProtectionPolicy(home: home, settings: settings.protection, references: ReferenceIndex.load(home: home),
-                         extraAllowedRoots: extraRoots)
+        let inboxes = settings.general.inboxToDocuments.filter { !$0.isEmpty }.map { home.expand($0) }
+        let documents = home.expand(settings.general.documentsRoot)
+        return ProtectionPolicy(home: home, settings: settings.protection, references: ReferenceIndex.load(home: home),
+                                extraAllowedRoots: extraRoots, cloudDestinationRoots: inboxes.isEmpty ? [] : [documents],
+                                wholeMoveInboxes: inboxes)
     }
 
     public func makeScanner(policy: ProtectionPolicy) -> FileScanner {

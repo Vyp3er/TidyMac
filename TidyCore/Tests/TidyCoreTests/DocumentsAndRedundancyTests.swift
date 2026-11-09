@@ -115,17 +115,20 @@ final class DocumentsModeTests: XCTestCase {
         XCTAssertEqual(dest["Projekt"], "~/Documents/Sonstiges")
         XCTAssertNil(dest["Desktop-Notiz.docx"], "Desktop is not emptied unless configured")
         XCTAssertEqual(Set(plan.disposable.map(\.name)), ["App.dmg", "Projekt.zip"])
-        XCTAssertTrue(plan.notes.contains { $0.contains("Löschen") })
-        XCTAssertTrue(plan.actions.allSatisfy { $0.kind == .move || $0.kind == .moveFolder })
+        let trash = plan.actions.filter { $0.kind == .trash }
+        XCTAssertEqual(Set(trash.map { $0.source.lastPathComponent }), ["App.dmg", "Projekt.zip"])
+        XCTAssertTrue(trash.allSatisfy { !$0.isSelected }, "deleting needs an individual tick")
+        XCTAssertTrue(plan.actions.filter { $0.kind != .trash }.allSatisfy { ($0.kind == .move || $0.kind == .moveFolder) && $0.isSelected },
+                      "every move out of Downloads is pre-selected")
+        XCTAssertTrue(plan.unsorted.filter { $0.parent.lastPathComponent == "Downloads" }.isEmpty)
 
         let journal = try Journal(url: fake.root.appendingPathComponent("j.sqlite"))
         let executor = Executor(home: fake.home, policy: fake.policy(), journal: journal,
                                 trash: FakeTrash(folder: fake.trash), openFiles: StaticOpenFilesProvider())
         let result = executor.execute(plan.actions.filter(\.isSelected), title: "Downloads leeren")
-        XCTAssertEqual(result.done, 6, result.messages.joined(separator: "\n"))
+        XCTAssertEqual(result.done, 8, result.messages.joined(separator: "\n"))
         let left = try FileManager.default.contentsOfDirectory(atPath: fake.url("Downloads").path).filter { !$0.hasPrefix(".") }.sorted()
-        XCTAssertEqual(left, ["App.dmg", "Projekt", "Projekt.zip", "irgendwas.xyz"],
-                       "only disposables and unsure (deselected) items remain")
+        XCTAssertEqual(left, ["App.dmg", "Projekt.zip"], "only the Trash suggestions (not ticked) remain")
         _ = executor.undoRun(result.runID)
         XCTAssertTrue(fake.exists("Downloads/Notizen.docx"))
         XCTAssertFalse(fake.exists("Documents/Unterlagen"))
@@ -158,5 +161,59 @@ final class DocumentsModeTests: XCTestCase {
         XCTAssertEqual(dest["reise.pdf"], "~/Documents/Reisen", "a new category for one file, but not two new levels")
         XCTAssertEqual(dest["anderes.pdf"], "~/Documents/Unterlagen", "targets outside Documents are not accepted")
         XCTAssertTrue(plan.unsorted.isEmpty)
+    }
+
+    func testCloudDocumentsProjectsAndWebPages() async throws {
+        let fake = try FakeHome()
+        // "Documents" in iCloud: simulated with a cloud marker file.
+        fake.file("Documents/.tresorit", "")
+        fake.dir("Documents/Uni")
+        fake.file("Downloads/skript.pdf", "x")
+        fake.file("Downloads/repo/.git/HEAD", "ref")
+        fake.file("Downloads/repo/main.py", "print(1)")
+        fake.file("Downloads/Paket/inner/.git/HEAD", "ref")
+        fake.file("Downloads/Paket/readme.txt", "r")
+        fake.file("Downloads/Artikel.html", "<html>")
+        fake.file("Downloads/Artikel_files/style.css", "css")
+        let inbox = fake.url("Downloads")
+        let docs = fake.url("Documents")
+
+        let strict = ProtectionPolicy(home: fake.home, settings: ProtectionSettings())
+        XCTAssertNotNil(strict.destinationProtection(for: docs.appendingPathComponent("Uni")), "cloud folders are protected by default")
+
+        let policy = ProtectionPolicy(home: fake.home, settings: ProtectionSettings(), cloudDestinationRoots: [docs], wholeMoveInboxes: [inbox])
+        XCTAssertNil(policy.destinationProtection(for: docs.appendingPathComponent("Uni")), "Documents is a valid target even in the cloud")
+        XCTAssertNotNil(policy.ancestorProtection(of: docs.appendingPathComponent("Uni/x.pdf")), "but not a source for sorting")
+        XCTAssertTrue(StructureIndex.build(home: fake.home, policy: policy).folders.contains { $0.lastPathComponent == "Uni" })
+
+        let general = GeneralSettings()
+        let scanner = FileScanner(home: fake.home, policy: policy, general: general)
+        let planner = Planner(home: fake.home, policy: policy,
+                              engine: RuleEngine(home: fake.home, settings: RuleSettings(), resolver: DestinationResolver(home: fake.home)),
+                              structure: StructureIndex.build(home: fake.home, policy: policy), provider: nil, cache: nil,
+                              general: general, aiSettings: AISettings())
+        planner.installedApps = []
+        let plan = await planner.plan(scan: await scanner.scan(.folders([inbox])))
+        let byName = Dictionary(uniqueKeysWithValues: plan.actions.map { ($0.source.lastPathComponent, $0) })
+        XCTAssertEqual(byName["skript.pdf"].map { fake.home.abbreviate($0.destinationFolder ?? fake.home.home) }, "~/Documents/Unterlagen")
+        XCTAssertEqual(byName["repo"]?.kind, .moveFolder, "a project leaves as a whole")
+        XCTAssertEqual(byName["repo"]?.isSelected, false, "… but only after a look")
+        XCTAssertEqual(byName["Paket"]?.kind, .moveFolder)
+        XCTAssertTrue(byName["Paket"]?.warnings.contains { $0.contains("Projektordner") } ?? false)
+        XCTAssertEqual(byName["Artikel.html"].map { fake.home.abbreviate($0.destinationFolder ?? fake.home.home) }, "~/Documents/Websites")
+        XCTAssertEqual(byName["Artikel_files"]?.kind, .moveFolder)
+        XCTAssertTrue(plan.unsorted.isEmpty)
+
+        // Executing: the project moves intact, the cloud target is accepted at run time too.
+        let journal = try Journal(url: fake.root.appendingPathComponent("c.sqlite"))
+        let executor = Executor(home: fake.home, policy: policy, journal: journal,
+                                trash: FakeTrash(folder: fake.trash), openFiles: StaticOpenFilesProvider())
+        let all = plan.actions.map { a -> PlannedAction in var c = a; c.isSelected = true; return c }.filter { $0.kind != .trash }
+        let result = executor.execute(all, title: "Alles raus")
+        XCTAssertEqual(result.failed, 0, result.messages.joined(separator: "\n"))
+        XCTAssertTrue(fake.exists("Documents/Projekte/repo/.git/HEAD"))
+        XCTAssertTrue(fake.exists("Documents/Websites/Artikel_files/style.css"))
+        let left = try FileManager.default.contentsOfDirectory(atPath: inbox.path).filter { !$0.hasPrefix(".") }
+        XCTAssertEqual(left, [], "Downloads is empty")
     }
 }

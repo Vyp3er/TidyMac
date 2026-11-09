@@ -257,9 +257,13 @@ final class AppModel {
             })
     }
 
+    /// Bulk selection. Trash suggestions are never ticked in bulk: each one needs its own tick.
     func setSelected(_ ids: [UUID], _ value: Bool) {
         let set = Set(ids)
-        for i in actions.indices where set.contains(actions[i].id) { actions[i].isSelected = value }
+        for i in actions.indices where set.contains(actions[i].id) {
+            if value && actions[i].kind == .trash && ids.count > 1 { continue }
+            actions[i].isSelected = value
+        }
     }
 
     func cleanupChoiceBinding(_ id: UUID) -> Binding<CleanupChoice> {

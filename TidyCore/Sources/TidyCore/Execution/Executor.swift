@@ -94,7 +94,9 @@ public final class Executor: @unchecked Sendable {
         if let reason = policy.itemProtection(source) {
             // A stale, unfinished download may go to the Trash (only via clean-up, only if not open).
             let staleDownload = action.kind == .trash && reason == .incompleteDownload
-            if !staleDownload { return reason.description }
+            // A downloaded copy of an app (in Downloads) may go to the Trash after confirmation.
+            let appCopy = action.kind == .trash && reason == .bundle(ext: "app") && policy.isInsideWholeMoveInbox(source)
+            if !staleDownload && !appCopy { return reason.description }
         }
         if let reason = policy.ancestorProtection(of: source) { return reason.description }
         let isDir = PathUtil.isDirectory(source)

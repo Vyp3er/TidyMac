@@ -90,7 +90,7 @@ Fang am besten klein an:
 
 1. Links **„Aufräumen“** wählen, oben **„Ausgewählte Ordner“**, und nur deinen Ordner **Downloads** in der Liste lassen.
 2. Auf **„Scannen & Vorschau“** klicken. Das liest nur, es wird noch nichts verändert.
-3. Sieh dir die Vorschau an. Aus Downloads bekommt jede Datei einen Platz in **„Dokumente“**, in passenden Ordnern wie Finanzen, Uni, Wohnung oder Bilder. Fehlende Ordner legt TidyMac an. Installer und bereits entpackte Archive bleiben liegen, du findest sie unter „Löschen“. Jede geplante Aktion steht mit Ziel, Begründung und Sicherheit (in Prozent) da. Unsichere Vorschläge und solche mit Warnung sind schon abgewählt. Du kannst einzelne Aktionen ab- oder anwählen, das Ziel ändern oder einen anderen Namen eintragen. Über den Umschalter oben siehst du die Ordner vorher und nachher als Baum.
+3. Sieh dir die Vorschau an. Aus Downloads bekommt jede Datei einen Platz in **„Dokumente“**, in passenden Ordnern wie Finanzen, Uni, Wohnung oder Bilder, und ist schon angekreuzt. Fehlende Ordner legt TidyMac an. Projektordner werden nur als Ganzes angeboten und sind abgewählt. Installer und bereits entpackte Archive stehen als „Papierkorb“ in der Liste; die kreuzt du einzeln an, wenn sie weg sollen. Jede geplante Aktion steht mit Ziel, Begründung und Sicherheit (in Prozent) da. Unsichere Vorschläge und solche mit Warnung sind schon abgewählt. Du kannst einzelne Aktionen ab- oder anwählen, das Ziel ändern oder einen anderen Namen eintragen. Über den Umschalter oben siehst du die Ordner vorher und nachher als Baum.
 4. Klicke auf **„Ausführen“** und bestätige.
 5. Gefällt dir etwas nicht: direkt im Banner auf **„Rückgängig“** klicken, oder später links unter **„Verlauf“** einen ganzen Lauf oder einzelne Aktionen zurücknehmen.
 

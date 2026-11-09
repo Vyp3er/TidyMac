@@ -135,6 +135,7 @@ public final class FileScanner: @unchecked Sendable {
         var count = 0
         var samples: [String] = []
         var blocked: String?
+        var warning: String?
     }
 
     struct Accumulator {
@@ -220,7 +221,13 @@ public final class FileScanner: @unchecked Sendable {
                                                            modified: values.contentModificationDate, sampleNames: Array(names.prefix(15))))
                 } else {
                     acc.protected.append(ProtectedEntry(url: url, reason: .projectRoot(marker: marker), isDirectory: true))
-                    if unit != nil { unit?.blocked = "Enthält einen Projektordner" }
+                    if unit != nil {
+                        if policy.isWholeMoveInbox(root.url) {
+                            unit?.warning = "Enthält einen Projektordner („\(url.lastPathComponent)“) – wird nur als Ganzes verschoben"
+                        } else {
+                            unit?.blocked = "Enthält einen Projektordner"
+                        }
+                    }
                 }
                 return
             case .normal:
@@ -255,7 +262,8 @@ public final class FileScanner: @unchecked Sendable {
                 let s = stats ?? UnitStats()
                 acc.folderCandidates.append(FolderItem(
                     url: url, kind: cohesive ?? .generic, size: s.size, fileCount: s.count,
-                    modified: values.contentModificationDate, sampleNames: s.samples, blockedReason: s.blocked))
+                    modified: values.contentModificationDate, sampleNames: s.samples, blockedReason: s.blocked,
+                    warning: s.warning))
             } else {
                 var none: UnitStats?
                 for child in listing {

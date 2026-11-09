@@ -235,6 +235,16 @@ public struct RedundancyDetector: Sendable {
             }
         }
 
+        // Downloaded copies of apps that are installed already.
+        for entry in scan.protected {
+            guard case let .bundle(ext) = entry.reason, ext.lowercased() == "app",
+                  PathUtil.isDescendant(entry.url, of: home.downloads, orEqual: false) else { continue }
+            let name = entry.url.lastPathComponent
+            guard installedApps.contains(Self.normalize(String(name.dropLast(4)))) else { continue }
+            add(Finding(url: entry.url, isDirectory: true, size: 0, modified: entry.modified, kind: .other,
+                        reason: "App-Kopie in Downloads – die App ist bereits in „Programme“ installiert.", confidence: 0.9))
+        }
+
         // Aborted downloads (the scanner protects them from sorting).
         for entry in scan.protected where entry.reason == .incompleteDownload {
             let modified = entry.modified ?? (try? entry.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate

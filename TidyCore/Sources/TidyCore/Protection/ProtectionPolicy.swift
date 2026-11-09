@@ -19,6 +19,11 @@ public final class ProtectionPolicy: @unchecked Sendable {
     let allowedCloudURLs: [URL]
     /// Explicitly selected roots outside the home folder (e.g. an external drive).
     let extraAllowedRoots: [URL]
+    /// Move targets inside these roots may be cloud-synced (e.g. "Documents" in iCloud): the
+    /// destination is the user's own Documents folder, which they asked to sort into.
+    public let cloudDestinationRoots: [URL]
+    /// Inboxes that are emptied completely (Downloads): projects inside may leave as a whole.
+    public let wholeMoveInboxes: [URL]
 
     private let cacheLock = NSLock()
     private var directoryCache: [String: DirectoryClass] = [:]
@@ -73,7 +78,9 @@ public final class ProtectionPolicy: @unchecked Sendable {
     ]
 
     public init(home: HomeContext, settings: ProtectionSettings, references: ReferenceIndex = ReferenceIndex(),
-                extraAllowedRoots: [URL] = []) {
+                extraAllowedRoots: [URL] = [], cloudDestinationRoots: [URL] = [], wholeMoveInboxes: [URL] = []) {
+        self.cloudDestinationRoots = cloudDestinationRoots.map(PathUtil.normalizeRoot)
+        self.wholeMoveInboxes = wholeMoveInboxes.map(PathUtil.normalizeRoot)
         self.home = home
         self.settings = settings
         self.references = references
@@ -108,6 +115,18 @@ public final class ProtectionPolicy: @unchecked Sendable {
 
     func isCloudAllowed(_ url: URL) -> Bool {
         allowedCloudURLs.contains { PathUtil.isDescendant(url, of: $0) }
+    }
+
+    func isCloudDestination(_ url: URL) -> Bool {
+        cloudDestinationRoots.contains { PathUtil.isDescendant(url, of: $0) }
+    }
+
+    public func isWholeMoveInbox(_ folder: URL) -> Bool {
+        wholeMoveInboxes.contains { PathUtil.isSame($0, folder) }
+    }
+
+    public func isInsideWholeMoveInbox(_ url: URL) -> Bool {
+        wholeMoveInboxes.contains { PathUtil.isDescendant(url, of: $0, orEqual: false) }
     }
 
     // MARK: - Single item
@@ -197,10 +216,17 @@ public final class ProtectionPolicy: @unchecked Sendable {
         if let service = cloud.service(forDirectory: url, entries: entries), !isCloudAllowed(url) {
             return .protected(.cloudSync(service: service))
         }
+        return localClass(url, entries: entries)
+    }
+
+    /// Projects and app databases, without the cloud check.
+    func localClass(_ url: URL, entries: [String]) -> DirectoryClass {
         let standard = isStandardFolder(url)
         let markerEntries = standard ? entries.filter { [".git", ".hg", ".svn", ".bzr", "_darcs", ".fossil"].contains($0) } : entries
         if let marker = projects.marker(folderName: url.lastPathComponent, entries: markerEntries) {
-            return settings.allowMovingProjectFolders ? .movableProject(marker: marker) : .protected(.projectRoot(marker: marker))
+            // Projects in an inbox that is emptied may leave as a whole (never file by file).
+            return settings.allowMovingProjectFolders || isInsideWholeMoveInbox(url)
+                ? .movableProject(marker: marker) : .protected(.projectRoot(marker: marker))
         }
         for entry in entries where !standard {
             let ext = FileNameTools.split(entry).ext.lowercased()
@@ -216,9 +242,16 @@ public final class ProtectionPolicy: @unchecked Sendable {
         return directoryClass(url, entries: entries)
     }
 
+    /// Like `directoryClass`, but inside a released destination root the cloud check is skipped.
+    public func destinationDirectoryClass(_ url: URL, entries: [String]) -> DirectoryClass {
+        let cls = directoryClass(url, entries: entries)
+        if case .protected(.cloudSync) = cls, isCloudDestination(url) { return localClass(url, entries: entries) }
+        return cls
+    }
+
     /// Checks every ancestor between the home folder (exclusive) and `url` (inclusive when `includeSelf`)
     /// for taboo areas, projects, cloud folders and packages.
-    public func ancestorProtection(of url: URL, includeSelf: Bool = false) -> ProtectionReason? {
+    public func ancestorProtection(of url: URL, includeSelf: Bool = false, asDestination: Bool = false) -> ProtectionReason? {
         if isUnderSystemPrefix(url) { return .systemLocation }
         if !isInAllowedArea(url) && !(includeSelf && PathUtil.isSame(url, home.home)) { return .outsideHome }
 
@@ -239,7 +272,10 @@ public final class ProtectionPolicy: @unchecked Sendable {
                 continue
             }
             if let reason = itemProtection(dir) { return reason }
-            switch directoryClass(dir) {
+            let cls = asDestination
+                ? destinationDirectoryClass(dir, entries: (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+                : directoryClass(dir)
+            switch cls {
             case let .protected(reason):
                 if case let .projectRoot(marker) = reason {
                     return PathUtil.isSame(dir, url) ? .projectRoot(marker: marker) : .insideProject(root: home.abbreviate(dir))
@@ -256,7 +292,7 @@ public final class ProtectionPolicy: @unchecked Sendable {
 
     /// Validates a target folder for moves (it may not exist yet).
     public func destinationProtection(for folder: URL) -> ProtectionReason? {
-        ancestorProtection(of: folder, includeSelf: true)
+        ancestorProtection(of: folder, includeSelf: true, asDestination: true)
     }
 
     /// First protected folder (project, cloud, app data, app-managed) somewhere inside `folder`.
